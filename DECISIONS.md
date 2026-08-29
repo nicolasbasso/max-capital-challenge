@@ -7,6 +7,9 @@ evidencia que la validará, en vez de una conclusión prematura.
 **Regla de honestidad del documento:** no se afirma una garantía mayor que la demostrada. Si algo quedó fuera
 de alcance, se declara acá en vez de simularlo.
 
+**Alcance del documento:** registra las conclusiones, no la deliberación. Cada decisión se mantiene en el orden
+de una página para que se pueda leer entera junto con el código.
+
 ## Estado de las decisiones
 
 Una decisión atraviesa cuatro estados. La distinción importa: elegir no es lo mismo que haber demostrado.
@@ -33,169 +36,99 @@ Una decisión atraviesa cuatro estados. La distinción importa: elegir no es lo 
 
 ## D-001 - Broker, particionado y secuencia por orden
 
-**Estado:** elegida. La opción está escogida y justificada; la evidencia que la valida todavía no existe.
+**Estado:** elegida. La evidencia que la valida todavía no existe.
 
-**Requisito.** Los ER de una misma orden deben aplicarse en su secuencia de emisión; órdenes distintas deben
-avanzar en paralelo; dos instancias consumen el mismo flujo y debe existir failover.
+**Requisito.** Los ER de una misma orden se aplican en su secuencia de emisión; órdenes distintas avanzan en
+paralelo; dos instancias consumen el mismo flujo, con failover.
 
-**Decisión.** Apache Kafka: un topic particionado, `numericOrderId` como message key, ambas instancias en el
-mismo consumer group.
+**Decisión.** Kafka: topic particionado, `numericOrderId` como message key, ambas instancias en el mismo
+consumer group. `enable.auto.commit=false`; el offset se commitea **después** del commit en PostgreSQL.
 
-**Alternativa considerada.** RabbitMQ con exchange `x-modulus-hash` (built-in, no requiere plugin) y Single
-Active Consumer por cola. **Cubre las cuatro garantías exactamente igual que Kafka.** La elección no se apoya
-en capacidad. RabbitMQ Super Streams se descartó sin evaluación profunda: introduce el protocolo Stream y
-manejo de offsets propio sin resolver nada que las otras dos alternativas no resuelvan.
+**Alternativa.** RabbitMQ con `x-modulus-hash` (built-in) y Single Active Consumer **cubre las cuatro
+garantías igual**: la elección no se apoya en capacidad. Super Streams se descartó sin evaluación profunda —
+agrega protocolo Stream y manejo de offsets propio sin resolver nada que las otras dos no resuelvan.
 
-**Mecanismo.**
+**Por qué Kafka.**
 
-- El productor usa `numericOrderId` como key; el particionador por defecto la hashea, de modo que todos los ER
-  de una misma orden caen en la misma partición.
-- Kafka preserva el orden dentro de una partición y asigna cada partición a un solo consumidor del grupo, con
-  failover automático.
-- `enable.auto.commit=false`. El offset se commitea **después** del commit de la transacción en PostgreSQL.
+1. La posición del consumidor es un offset consultable e independiente de los mensajes, **asserteable desde un
+   test**: así se demuestra la reentrega tras una caída. En RabbitMQ la evidencia es el flag `redelivered`
+   dentro del consumidor — alcanza, pero no es un valor inspeccionable.
+2. Consumir no borra, así que el log permite reconstruir la historia de una orden.
 
-**Qué cubre el broker, y bajo qué condiciones.** Conviene separar lo que vale siempre de lo que depende de
-configuración todavía no decidida.
+**Qué cubre, incondicionalmente.** Reentrega mientras el offset no se commitee; orden dentro de la partición;
+una partición asignada a un solo consumidor, con failover; y *fencing* del commit de un consumidor con
+generación caducada tras un rebalance.
 
-*Incondicional, por el modelo de Kafka:*
+**Qué no cubre.** Kafka no tiene visibilidad sobre PostgreSQL: lo que un consumidor zombie ya escribió
+sobrevive a su propio fencing. La aplicación única de un ER y la alineación contador/ledger son barreras
+durables en la base (D-002, D-003, D-004).
 
-- **Reentrega ante fallo del consumidor:** si el offset no se commitea, el registro se vuelve a leer. Esto no
-  depende de configuración.
-- **Orden dentro de la partición:** los ER de una misma orden se entregan en el orden en que se escribieron.
-- **Exclusividad:** una partición se asigna a un solo consumidor del grupo a la vez, con failover.
-- **Fencing:** un consumidor con generación caducada tras un rebalance ve rechazado su commit de offset.
+**Qué depende de configuración aún abierta.** Que un mensaje no se pierda **ante una falla del broker** no es
+automático: depende de `acks`, factor de replicación y `min.insync.replicas`. Este ejercicio corre un Kafka de
+un solo nodo, con replicación 1, así que una falla del broker **sí** implica pérdida. Las garantías demostradas
+se acotan deliberadamente a caídas del consumidor y reentregas. La granularidad del commit de offset se decide
+en D-003.
 
-*Condicional, y todavía sin decidir:*
+**Se resigna frente a RabbitMQ.** La dead-letter hay que construirla; el `docker-compose` es más pesado.
 
-- **Que el mensaje no se pierda ante una falla del broker** no es una propiedad automática: depende de los
-  `acks` del productor, del factor de replicación, de `min.insync.replicas` y de la política de retención.
-  Este ejercicio levanta un Kafka de un solo nodo, de modo que el factor de replicación será 1 y **una falla
-  del broker sí implica pérdida**. El alcance que se declara es acotado a propósito: las garantías demostradas
-  cubren **caídas del consumidor y reentregas**, no fallas del broker ni del disco. Afirmar lo contrario sería
-  reclamar una durabilidad que la topología del ejercicio no tiene.
-- **La granularidad del commit de offset.** `enable.auto.commit=false` desactiva el commit automático, pero no
-  define si el offset se confirma por registro, por lote o manualmente; Spring Kafka usa `BATCH` por defecto.
-  Esa elección determina el tamaño exacto de la ventana de reentrega y se decide en **D-003**.
+**Límites del problema, con cualquiera de los dos brokers.** Un ER permanentemente inválido frena su partición
+y con ella a las órdenes co-particionadas: RabbitMQ sólo lo evitaría agregando concurrencia con serialización
+propia por clave, o con reintento diferido que rompería la secuencia de la orden. El paralelismo tiene techo en
+la cantidad de particiones, que se mantiene fija. La retención es una política, no un archivo permanente.
 
-**Qué NO cubre el broker.** Kafka no tiene visibilidad sobre PostgreSQL. Un consumidor zombie puede haber
-commiteado en la base antes de ser expulsado, y ese registro queda escrito. La aplicación única de un ER y la
-alineación entre contador y ledger no las provee el broker: son barreras durables en la base (D-002, D-003,
-D-004).
-
-**Por qué Kafka y no RabbitMQ.**
-
-1. *(Primaria)* La posición del consumidor es un offset consultable, independiente de los mensajes. La
-   reentrega tras una caída se demuestra comparando el offset commiteado antes y después, y es asserteable
-   desde un test. En RabbitMQ la evidencia es el flag `redelivered` dentro del consumidor: alcanza para
-   probarlo, pero no es un valor inspeccionable ni automatizable del mismo modo.
-2. *(Secundaria)* Consumir no borra: el log permite reconstruir la historia de una orden. RabbitMQ elimina el
-   mensaje al ackearlo.
-
-**Lo que se resigna frente a RabbitMQ.** Son costos diferenciales, y son acotados:
-
-- **Dead-letter:** RabbitMQ la expone como configuración de la cola (`x-dead-letter-exchange`); en Kafka hay
-  que construirla.
-- **Topología de despliegue:** el `docker-compose` de Kafka es más pesado (variables de KRaft) que el de
-  RabbitMQ.
-
-**Límites de la solución, independientes del broker elegido.** No son resignaciones frente a RabbitMQ: se
-tendrían con cualquiera de las dos alternativas bajo el requisito de orden por clave.
-
-- **Mensaje venenoso:** en Kafka la unidad de orden y la unidad de avance son la misma (la partición), porque
-  el offset es un cursor único. Un ER permanentemente inválido frena a las órdenes co-particionadas mientras
-  dura el reintento. RabbitMQ permitiría desacoplarlas gracias al ack por mensaje, pero sólo agregando
-  concurrencia con serialización propia por clave —es decir, reconstruyendo a mano lo que la partición da— o
-  con reintento diferido, que devuelve el ER más tarde y rompe la secuencia de la propia orden. Bajo la
-  restricción de orden por clave, ninguna de las dos alternativas lo evita en la práctica. Se declara el radio
-  de daño: la partición, no la orden. La mitigación se define en D-006, donde el registro en la dead-letter
-  debe quedar durable **antes** de commitear el offset, para que el desbloqueo no se convierta en una pérdida
-  silenciosa.
-- **Paralelismo con techo:** limitado por la cantidad de particiones (o de colas en RabbitMQ), que se mantiene
-  fija durante el ejercicio; cambiarla remapea keys en ambos casos.
-- **Retención:** Kafka no borra al consumir, pero sí borra por política de retención. El histórico dura lo que
-  se configure; no es un archivo permanente salvo que se lo defina como tal.
-
-**Evidencia que la validará.** Dos instancias reales consumiendo órdenes intercaladas, conservando el orden
-interno de cada una; y una caída entre el commit de PostgreSQL y el commit del offset, comparando el offset
-commiteado antes y después, con una sola entrada de ledger resultante.
+**Evidencia que la validará.** Dos instancias con órdenes intercaladas conservando el orden interno de cada
+una; y una caída entre el commit de PostgreSQL y el del offset, comparando el offset commiteado antes y
+después, con una sola entrada de ledger resultante.
 
 ---
 
 ## D-002 - Identidad individual del ER y clave de deduplicación
 
-**Estado:** elegida. La opción está escogida y justificada; la evidencia que la valida todavía no existe.
+**Estado:** elegida. La evidencia que la valida todavía no existe.
 
 **Requisito.** Un ER duplicado o reentregado no debe corromper el estado. `numericOrderId` identifica la
-**orden** y se repite en todos sus ER, así que no sirve para reconocer un duplicado: muchos ER por orden es lo
-normal, no una anomalía.
+**orden** y se repite en todos sus ER: muchos ER por orden es lo normal, no un duplicado.
 
-**Qué protege.** La pata de *"exactamente una vez"* de la invariante de secuencia (ver
-[`docs/acceptance-matrix.md`](./docs/acceptance-matrix.md)). El estado legal de una orden es un prefijo de su
-secuencia emitida, aplicado sin huecos, desde el principio y **exactamente una vez**. Esta decisión sostiene
-la última condición.
+**Qué protege.** La condición de *"exactamente una vez"* de la invariante de secuencia, en
+[`docs/acceptance-matrix.md`](./docs/acceptance-matrix.md).
 
-**Decisión.** Clave compuesta `(numericOrderId, fixId)`, respaldada por una restricción de unicidad durable en
-PostgreSQL. Sin hashear.
+**Decisión.** Clave compuesta `(numericOrderId, fixId)`, con restricción de unicidad durable en PostgreSQL,
+sin hashear.
 
-**Por qué compuesta.** El enunciado no garantiza que `fixId` sea único globalmente; sólo describe el campo. La
-clave compuesta es correcta **en ambos escenarios**: si `fixId` resulta único global, funciona; si sólo es
-único dentro de la orden, es la única que funciona. Se elige lo que es correcto bajo los dos supuestos
-posibles, porque el dato que los distingue no está disponible.
+**Por qué compuesta.** El enunciado no garantiza que `fixId` sea único globalmente. La clave compuesta es
+correcta en los dos escenarios: si lo es, funciona; si sólo es único dentro de la orden, es la única que
+funciona.
 
-**Por qué `fixId` y no `secondaryTradeId`.** El enunciado anota `secondaryTradeId` como "identidad de la
-ejecución (para dedup)" y `operationNumber` como equivalente. Se elige `fixId` de todos modos porque la
-pregunta que debe responder la clave es *"¿este reporte ya fue aplicado?"*, y **todos los ER son mensajes,
-pero no todos son ejecuciones**: un `NEW` y un `CANCELLED` no operan nada. Como el enunciado exige una entrada
-de ledger por cada ER **efectivamente aplicado** —no por cada ejecución—, la clave debe poder identificar
-también a esos dos. Una identidad de mensaje cubre el conjunto completo; una identidad de ejecución, no.
+**Por qué `fixId` y no `secondaryTradeId`,** que el enunciado anota como identidad para dedup: todos los ER son
+mensajes, pero no todos son ejecuciones — un `NEW` y un `CANCELLED` no operan nada. Como se exige una entrada
+de ledger por ER **efectivamente aplicado** y no por ejecución, la clave tiene que identificar también a esos.
 
-**Por qué no el offset de Kafka.** Aunque distingue registros y se mantiene estable en una reentrega, se
-descarta por dos razones independientes:
+**Por qué no el offset de Kafka.** No cubre la republicación del emisor, que el enunciado distingue de la
+reentrega: mismo hecho de negocio, dos offsets. Y metería un dato del transporte dentro del dominio, cuando el
+requisito de idempotencia es anterior a la elección de broker. De ahí la regla: **la clave sale del payload,
+nunca del transporte** — un campo del payload es idéntico en los dos casos.
 
-1. **No cubre el duplicado del emisor.** El enunciado distingue "duplicado" de "reentregado". Si el emisor
-   publica dos veces el mismo ER, son dos registros con offsets distintos y el mismo hecho de negocio: la
-   deduplicación por offset no lo detecta.
-2. **Invierte la dependencia.** El offset es un dato del transporte. Guardarlo como identidad de un Execution
-   Report metería D-001 dentro del modelo de dominio, y el requisito de idempotencia existía antes de que se
-   eligiera el broker.
+**Identidad, no ordinalidad.** No hay número secuencial en el payload, y `status` no ordena parciales
+repetidos. No hace falta: el orden lo garantiza D-001. La clave sólo responde *"¿ya lo apliqué?"*.
 
-De ahí el principio general: **la clave de deduplicación se toma del payload, nunca del transporte.** Un campo
-del payload es idéntico en los dos casos —reentrega y republicación—, y por eso cubre ambos.
+**Sin hash.** Una colisión sería una pérdida silenciosa, y la clave natural es legible al cruzar el ledger
+contra el topic para demostrar la ventana de caída.
 
-**Identidad, no ordinalidad.** El payload no contiene ningún número secuencial por orden, y `status` tampoco
-sirve porque puede haber varios `PARTIALLY_FILLED`. No hace falta: el orden de aplicación lo garantiza D-001
-(misma key, misma partición, un consumidor por partición, y un consumidor que no avanza sobre un ER fallido).
-La clave sólo responde *"¿ya lo apliqué?"*, no *"¿cuál va antes?"*.
+**Supuestos declarados.** `fixId` está presente y no vacío en todo ER, incluidos `NEW` y `CANCELLED`; y un
+duplicado se republica idéntico, `fixId` incluido, que es como lo emite el generador determinístico del
+ejercicio. No hay documentación del formato más allá del enunciado, que autoriza a resolver la duda y anotar
+la suposición.
 
-**Por qué no se hashea.** Un hash cambia una garantía exacta por una probabilística: dos ER distintos que
-colisionen harían que el segundo se descarte como duplicado, que es exactamente la pérdida silenciosa que el
-enunciado prohíbe. A cambio se ahorran unos bytes de índice que PostgreSQL no necesita a esta escala. Además
-la clave natural es legible, y eso importa para la evidencia: al demostrar la ventana de caída se quiere leer
-el par `(numericOrderId, fixId)` y cruzarlo contra el topic, no un valor opaco.
+**Si el supuesto falla.** Un `fixId` ausente o vacío es un error permanente: se preserva en cuarentena y la
+orden queda marcada como explícitamente incompleta. Ni descarte silencioso ni aplicación sin deduplicar.
+El mecanismo se define en D-006. El supuesto es barato porque falla ruidoso: si faltara sistemáticamente,
+todas las órdenes irían a cuarentena en su primer ER.
 
-**Supuestos declarados.**
+**Límite declarado.** Si un emisor real asignara un `fixId` nuevo en cada transmisión del mismo hecho, la clave
+debería moverse a `secondaryTradeId`, con su probable ausencia en los ER que no ejecutan.
 
-1. `fixId` está presente y no vacío en todo ER, incluidos `NEW` y `CANCELLED`.
-2. Un ER duplicado se republica idéntico, `fixId` incluido. Así lo emite el generador determinístico de este
-   ejercicio.
-
-No existe documentación del formato más allá del enunciado, que autoriza explícitamente a resolver las dudas
-de alcance y dejar la suposición anotada. Esto es esa suposición.
-
-**Qué pasa si el supuesto falla.** Un ER con `fixId` ausente o vacío es un error permanente: se preserva en
-cuarentena y la orden afectada queda marcada como explícitamente incompleta. No se descarta —sería pérdida
-silenciosa— ni se aplica sin deduplicar —rompería la idempotencia—. El mecanismo se define en D-006, incluido
-que el registro en cuarentena debe quedar durable **antes** de commitear el offset. El supuesto es barato
-porque falla de forma ruidosa: si `fixId` faltara sistemáticamente, todas las órdenes irían a cuarentena en su
-primer ER y el primer test lo mostraría.
-
-**Límite declarado.** Si un emisor real asignara un `fixId` nuevo en cada transmisión del mismo hecho, la
-clave debería moverse a `secondaryTradeId`, y habría que resolver su probable ausencia en los ER que no
-ejecutan. Esa variante no se implementa acá.
-
-**Evidencia que la validará.** El mismo ER entregado dos veces —una por reentrega tras una caída antes del
-commit del offset, otra por republicación del emisor— produce una sola aplicación efectiva: una única entrada
-de ledger y un contador que no se incrementa dos veces.
+**Evidencia que la validará.** El mismo ER entregado dos veces —por reentrega tras una caída y por
+republicación del emisor— produce una sola entrada de ledger y un solo incremento del contador.
 
 ---
 
