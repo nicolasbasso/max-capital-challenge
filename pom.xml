@@ -70,6 +70,52 @@
           </execution>
         </executions>
       </plugin>
+
+      <!--
+        Mutation testing (PIT). No se ata a ninguna fase del ciclo de vida a proposito:
+        se invoca explicitamente para no encarecer cada `mvn verify` local.
+
+            ./mvnw test-compile org.pitest:pitest-maven:mutationCoverage
+
+        El objetivo no es cobertura: es responder si los tests DETECTAN un cambio de
+        comportamiento. El enunciado pide "pruebas significativas sobre los puntos mas
+        fragiles", y el mutation score es la forma de medir eso en vez de afirmarlo.
+      -->
+      <plugin>
+        <groupId>org.pitest</groupId>
+        <artifactId>pitest-maven</artifactId>
+        <version>1.19.1</version>
+        <dependencies>
+          <dependency>
+            <groupId>org.pitest</groupId>
+            <artifactId>pitest-junit5-plugin</artifactId>
+            <version>1.2.2</version>
+          </dependency>
+        </dependencies>
+        <configuration>
+          <targetClasses>
+            <param>com.maxcapital.orderstate.*</param>
+          </targetClasses>
+          <targetTests>
+            <param>com.maxcapital.orderstate.*</param>
+          </targetTests>
+          <!-- La clase de arranque solo tiene main(); mutarla no dice nada del dominio. -->
+          <excludedClasses>
+            <param>com.maxcapital.orderstate.OrderStateServiceApplication</param>
+          </excludedClasses>
+          <outputFormats>
+            <param>HTML</param>
+            <param>XML</param>
+          </outputFormats>
+          <timestampedReports>false</timestampedReports>
+          <!--
+            Hoy no hay logica de dominio, asi que no hay mutantes que generar y PIT
+            fallaria. Se desactiva esa condicion hasta que exista la maquina de estados.
+            A partir del Slice 2 se activa <mutationThreshold> con un valor real.
+          -->
+          <failWhenNoMutations>false</failWhenNoMutations>
+        </configuration>
+      </plugin>
     </plugins>
   </build>
 </project>

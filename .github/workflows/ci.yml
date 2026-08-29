@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Un push nuevo a la misma rama cancela la corrida anterior: no tiene sentido
+# esperar el resultado de un commit que ya quedo obsoleto.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Java 21: es la restriccion del enunciado, y el maven-enforcer-plugin del
+      # proyecto hace fallar el build con cualquier otra version.
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build and run tests
+        run: ./mvnw -B --no-transfer-progress clean verify
+
+      # Se sube siempre, tambien cuando el build falla: si un test rompe, el reporte
+      # es justamente lo que hace falta mirar.
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  mutation:
+    name: Mutation testing (PIT)
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      # Mide si los tests detectan un cambio de comportamiento, no cuanto codigo tocan.
+      - name: Run mutation coverage
+        run: ./mvnw -B --no-transfer-progress test-compile org.pitest:pitest-maven:mutationCoverage
+
+      - name: Publish mutation score
+        if: always()
+        run: |
+          REPORT=target/pit-reports/mutations.xml
+          if [ ! -f "$REPORT" ]; then
+            echo "### Mutation testing" >> "$GITHUB_STEP_SUMMARY"
+            echo "Sin reporte: todavia no hay logica de dominio que mutar." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # `grep -c` imprime 0 y ademas sale con codigo 1 cuando no hay coincidencias.
+          # Con `$(grep -c ... || echo 0)` se imprimen DOS ceros y la variable queda
+          # multilinea, rompiendo la comparacion numerica. El `||` va sobre la asignacion.
+          TOTAL=$(grep -c '<mutation ' "$REPORT") || TOTAL=0
+          KILLED=$(grep -c 'status=.KILLED.' "$REPORT") || KILLED=0
+          {
+            echo "### Mutation testing (PIT)"
+            echo ""
+            echo "| Metrica | Valor |"
+            echo "|---|---|"
+            echo "| Mutantes generados | $TOTAL |"
+            echo "| Mutantes eliminados | $KILLED |"
+            if [ "$TOTAL" -gt 0 ]; then
+              echo "| Mutation score | $(( KILLED * 100 / TOTAL ))% |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pit-report
+          path: target/pit-reports/
+          if-no-files-found: ignore
+          retention-days: 7
