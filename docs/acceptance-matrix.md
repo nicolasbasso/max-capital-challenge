@@ -10,11 +10,35 @@ enunciado; las tres columnas siguientes son el trabajo de diseño.
 
 Una fila sin las tres columnas completas es una garantía que todavía no sabemos verificar.
 
+### La invariante ancla: prefijo
+
+R3 sostiene a varias de las demás, así que conviene enunciarla aparte.
+
+El mercado emite, para cada orden, una secuencia de ER: `ER1 → ER2 → ... → ERn`. En cualquier instante el
+servicio aplicó sólo una parte de esa secuencia, porque los ER siguen llegando. La pregunta es qué partes son
+estados legales.
+
+- `{ER1, ER2}` es legal.
+- `{ER1, ER3}` no lo es: falta uno en el medio.
+- `{ER2, ER3}` tampoco: no arranca por el `NEW`.
+
+Lo que tienen en común los estados legales es que son **prefijos** de la secuencia emitida: sin huecos y desde
+el principio. De ahí sale la invariante, y su valor está en que **no menciona ninguna tecnología** y puede
+verificarse congelando el sistema en cualquier momento, sin conocer el historial de cómo se llegó ahí.
+
+Una sola propiedad cubre tres fallas distintas:
+
+| Falla | Qué condición del prefijo rompe |
+|---|---|
+| Se perdió un ER intermedio | "sin huecos" |
+| Se aplicó un ER antes de tiempo | "desde el principio" |
+| Se aplicó dos veces el mismo ER | "exactamente una vez" |
+
 | # | Requisito (del enunciado) | Invariante | Escenario de aceptación | Evidencia |
 |---|---|---|---|---|
 | R1 | Ingesta asíncrona de ER a través de un message broker. | | | |
 | R2 | Dos instancias del servicio corriendo en paralelo vía `docker compose`, ambas consumiendo. | | | |
-| R3 | Los ER de una misma orden se aplican en la secuencia en que fueron emitidos (no se puede aplicar un `FILLED` antes del `NEW` de esa orden). | | | |
+| R3 | Los ER de una misma orden se aplican en la secuencia en que fueron emitidos (no se puede aplicar un `FILLED` antes del `NEW` de esa orden). | **En todo momento, el estado persistido de una orden corresponde a la aplicación, exactamente una vez y en orden, de un prefijo de la secuencia de ER que el mercado emitió para esa orden.** | *(propuesto)* Se emiten los ER de dos órdenes intercalados entre sí, incluyendo una reentrega de un ER intermedio de la primera. Al terminar, el estado y el ledger de cada orden corresponden a un prefijo de su propia secuencia. | *(propuesto)* Test que reconstruye la secuencia aplicada desde el ledger y verifica que sea un prefijo de la secuencia emitida, para ambas órdenes. |
 | R4 | Entre órdenes distintas no importa el orden relativo: pueden procesarse en paralelo. | | | |
 | R5 | Un ER duplicado o reentregado no corrompe el estado. La identidad del duplicado es la del ER individual, no la de la orden. | | | |
 | R6 | Entidad orden con estado mutable, persistente y consultable. | | | |
