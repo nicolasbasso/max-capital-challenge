@@ -21,7 +21,7 @@ Una decisión atraviesa cuatro estados. La distinción importa: elegir no es lo 
 | ID | Decisión | Estado | Evidencia |
 |---|---|---|---|
 | D-001 | Broker, particionado y secuencia por orden | **Elegida** | Pendiente: assert de offsets en T4.x / T5.3 |
-| D-002 | Identidad individual del ER y clave de deduplicación | Abierta | — |
+| D-002 | Identidad individual del ER y clave de deduplicación | **Elegida** | Pendiente: reentrega y republicación en T3.2 |
 | D-003 | Frontera transaccional, ACK/offset y recuperación | Abierta | — |
 | D-004 | Modelo persistente de orden, ledger y concurrencia | Abierta | — |
 | D-005 | Máquina de estados y terminalidad | Abierta | — |
@@ -123,14 +123,79 @@ commiteado antes y después, con una sola entrada de ledger resultante.
 
 ## D-002 - Identidad individual del ER y clave de deduplicación
 
-**Pregunta que debe responder:** ¿qué campo o combinación identifica un ER individual, dado que
-`numericOrderId` identifica la orden y se repite en todos sus ER? ¿Qué ocurre si ese campo viene ausente,
-vacío o repetido entre órdenes distintas?
+**Estado:** elegida. La opción está escogida y justificada; la evidencia que la valida todavía no existe.
 
-**Evidencia que la validará:** el mismo ER entregado dos veces produce una sola aplicación efectiva: una sola
-entrada de ledger y un contador que no se incrementa dos veces.
+**Requisito.** Un ER duplicado o reentregado no debe corromper el estado. `numericOrderId` identifica la
+**orden** y se repite en todos sus ER, así que no sirve para reconocer un duplicado: muchos ER por orden es lo
+normal, no una anomalía.
 
-**Estado:** abierta.
+**Qué protege.** La pata de *"exactamente una vez"* de la invariante de secuencia (ver
+[`docs/acceptance-matrix.md`](./docs/acceptance-matrix.md)). El estado legal de una orden es un prefijo de su
+secuencia emitida, aplicado sin huecos, desde el principio y **exactamente una vez**. Esta decisión sostiene
+la última condición.
+
+**Decisión.** Clave compuesta `(numericOrderId, fixId)`, respaldada por una restricción de unicidad durable en
+PostgreSQL. Sin hashear.
+
+**Por qué compuesta.** El enunciado no garantiza que `fixId` sea único globalmente; sólo describe el campo. La
+clave compuesta es correcta **en ambos escenarios**: si `fixId` resulta único global, funciona; si sólo es
+único dentro de la orden, es la única que funciona. Se elige lo que es correcto bajo los dos supuestos
+posibles, porque el dato que los distingue no está disponible.
+
+**Por qué `fixId` y no `secondaryTradeId`.** El enunciado anota `secondaryTradeId` como "identidad de la
+ejecución (para dedup)" y `operationNumber` como equivalente. Se elige `fixId` de todos modos porque la
+pregunta que debe responder la clave es *"¿este reporte ya fue aplicado?"*, y **todos los ER son mensajes,
+pero no todos son ejecuciones**: un `NEW` y un `CANCELLED` no operan nada. Como el enunciado exige una entrada
+de ledger por cada ER **efectivamente aplicado** —no por cada ejecución—, la clave debe poder identificar
+también a esos dos. Una identidad de mensaje cubre el conjunto completo; una identidad de ejecución, no.
+
+**Por qué no el offset de Kafka.** Aunque distingue registros y se mantiene estable en una reentrega, se
+descarta por dos razones independientes:
+
+1. **No cubre el duplicado del emisor.** El enunciado distingue "duplicado" de "reentregado". Si el emisor
+   publica dos veces el mismo ER, son dos registros con offsets distintos y el mismo hecho de negocio: la
+   deduplicación por offset no lo detecta.
+2. **Invierte la dependencia.** El offset es un dato del transporte. Guardarlo como identidad de un Execution
+   Report metería D-001 dentro del modelo de dominio, y el requisito de idempotencia existía antes de que se
+   eligiera el broker.
+
+De ahí el principio general: **la clave de deduplicación se toma del payload, nunca del transporte.** Un campo
+del payload es idéntico en los dos casos —reentrega y republicación—, y por eso cubre ambos.
+
+**Identidad, no ordinalidad.** El payload no contiene ningún número secuencial por orden, y `status` tampoco
+sirve porque puede haber varios `PARTIALLY_FILLED`. No hace falta: el orden de aplicación lo garantiza D-001
+(misma key, misma partición, un consumidor por partición, y un consumidor que no avanza sobre un ER fallido).
+La clave sólo responde *"¿ya lo apliqué?"*, no *"¿cuál va antes?"*.
+
+**Por qué no se hashea.** Un hash cambia una garantía exacta por una probabilística: dos ER distintos que
+colisionen harían que el segundo se descarte como duplicado, que es exactamente la pérdida silenciosa que el
+enunciado prohíbe. A cambio se ahorran unos bytes de índice que PostgreSQL no necesita a esta escala. Además
+la clave natural es legible, y eso importa para la evidencia: al demostrar la ventana de caída se quiere leer
+el par `(numericOrderId, fixId)` y cruzarlo contra el topic, no un valor opaco.
+
+**Supuestos declarados.**
+
+1. `fixId` está presente y no vacío en todo ER, incluidos `NEW` y `CANCELLED`.
+2. Un ER duplicado se republica idéntico, `fixId` incluido. Así lo emite el generador determinístico de este
+   ejercicio.
+
+No existe documentación del formato más allá del enunciado, que autoriza explícitamente a resolver las dudas
+de alcance y dejar la suposición anotada. Esto es esa suposición.
+
+**Qué pasa si el supuesto falla.** Un ER con `fixId` ausente o vacío es un error permanente: se preserva en
+cuarentena y la orden afectada queda marcada como explícitamente incompleta. No se descarta —sería pérdida
+silenciosa— ni se aplica sin deduplicar —rompería la idempotencia—. El mecanismo se define en D-006, incluido
+que el registro en cuarentena debe quedar durable **antes** de commitear el offset. El supuesto es barato
+porque falla de forma ruidosa: si `fixId` faltara sistemáticamente, todas las órdenes irían a cuarentena en su
+primer ER y el primer test lo mostraría.
+
+**Límite declarado.** Si un emisor real asignara un `fixId` nuevo en cada transmisión del mismo hecho, la
+clave debería moverse a `secondaryTradeId`, y habría que resolver su probable ausencia en los ER que no
+ejecutan. Esa variante no se implementa acá.
+
+**Evidencia que la validará.** El mismo ER entregado dos veces —una por reentrega tras una caída antes del
+commit del offset, otra por republicación del emisor— produce una sola aplicación efectiva: una única entrada
+de ledger y un contador que no se incrementa dos veces.
 
 ---
 
