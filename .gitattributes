@@ -1,0 +1,8 @@
+# Normalizacion de finales de linea. Sin esto, el wrapper de Maven para Windows
+# (CRLF) hace fallar `git diff --check` con falsos positivos de trailing whitespace.
+* text=auto
+
+/mvnw    text eol=lf
+*.sh     text eol=lf
+/mvnw.cmd text eol=crlf
+*.cmd     text eol=crlf

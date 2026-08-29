@@ -1,0 +1,31 @@
+# Build
+target/
+!.mvn/wrapper/maven-wrapper.jar
+build/
+*.class
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.classpath
+.project
+nbproject/
+
+# macOS
+.DS_Store
+
+# Logs y evidencia local
+*.log
+logs/
+
+# Entorno local: nunca commitear credenciales ni overrides de máquina
+.env
+.env.*
+!.env.example
+*.local.yml
+application-local.yml
+application-local.properties

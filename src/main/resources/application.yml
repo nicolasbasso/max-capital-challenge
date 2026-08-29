@@ -1,0 +1,16 @@
+spring:
+  application:
+    name: order-state-service
+
+server:
+  port: ${SERVER_PORT:8080}
+
+# Cada instancia se identifica para poder correlacionar en los logs que orden proceso
+# cual de las dos. Se usa desde el slice 4 en adelante; se define ahora para que las
+# dos instancias no sean indistinguibles cuando haga falta demostrarlo.
+app:
+  instance-id: ${APP_INSTANCE_ID:local}
+
+logging:
+  pattern:
+    console: "%d{HH:mm:ss.SSS} [${app.instance-id:local}] [%thread] %-5level %logger{36} - %msg%n"

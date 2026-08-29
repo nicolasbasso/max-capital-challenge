@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>3.5.3</version>
+    <relativePath/>
+  </parent>
+
+  <groupId>com.maxcapital</groupId>
+  <artifactId>order-state-service</artifactId>
+  <version>0.0.1-SNAPSHOT</version>
+  <name>order-state-service</name>
+  <description>Max Capital challenge - execution report ingestion and order state</description>
+
+  <properties>
+    <java.version>21</java.version>
+  </properties>
+
+  <dependencies>
+    <!--
+      Dependencias deliberadamente minimas.
+      No se agregan cliente de broker ni persistencia todavia: D-001 (broker) y D-004
+      (motor de persistencia) siguen abiertas en DECISIONS.md. Agregarlas ahora seria
+      cerrar por inercia una decision que el enunciado pide justificar.
+    -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+      </plugin>
+
+      <!--
+        El enunciado restringe el runtime a Java 21 o 25. El enforcer convierte esa
+        restriccion en un fallo de build en vez de una nota en el README: compilar con
+        un JDK no permitido es un error, no una advertencia.
+      -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-enforcer-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>enforce-java-version</id>
+            <goals><goal>enforce</goal></goals>
+            <configuration>
+              <rules>
+                <requireJavaVersion>
+                  <version>[21,22)</version>
+                  <message>Este proyecto requiere Java 21. El enunciado del challenge admite Java 21 o 25; se eligio 21 por ser el LTS con soporte mas maduro. Configura JAVA_HOME apuntando a un JDK 21 (ver README).</message>
+                </requireJavaVersion>
+              </rules>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>
