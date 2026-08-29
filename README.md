@@ -68,3 +68,12 @@ sólo demuestra que el contexto de Spring levanta.
 | El build limpio pasa con Java 21 | `./mvnw clean verify` | `BUILD SUCCESS`, 2 tests en verde |
 | El build rechaza un JDK no permitido | `JAVA_HOME=<jdk-no-21> ./mvnw clean verify` | `BUILD FAILURE` con el mensaje del enforcer |
 | El artefacto empaquetado arranca | `java -jar target/order-state-service-0.0.1-SNAPSHOT.jar` | `Started OrderStateServiceApplication` |
+
+## Sobre el proceso
+
+Las decisiones de diseño de este repositorio se trabajaron usando un modelo de lenguaje como *sparring*: para
+cuestionar alternativas, forzar escenarios de falla concretos y contrastar afirmaciones contra la documentación
+oficial de cada tecnología. Los commits llevan el trailer `Co-Authored-By` correspondiente.
+
+El razonamiento y los trade-offs registrados en [`DECISIONS.md`](./DECISIONS.md) son propios y defendibles uno
+por uno, incluyendo qué garantiza cada componente, qué no garantiza, y qué se resignó a conciencia.
