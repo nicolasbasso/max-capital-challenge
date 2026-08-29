@@ -44,41 +44,41 @@ paralelo; dos instancias consumen el mismo flujo, con failover.
 **Decisión.** Kafka: topic particionado, `numericOrderId` como message key, ambas instancias en el mismo
 consumer group. `enable.auto.commit=false`; el offset se commitea **después** del commit en PostgreSQL.
 
-**Alternativa.** RabbitMQ con `x-modulus-hash` (built-in) y Single Active Consumer **cubre las cuatro
+**Alternativa.** RabbitMQ con `x-modulus-hash` y Single Active Consumer **cubre las cuatro
 garantías igual**: la elección no se apoya en capacidad. Super Streams se descartó sin evaluación profunda —
 agrega protocolo Stream y manejo de offsets propio sin resolver nada que las otras dos no resuelvan.
 
 **Por qué Kafka.**
 
-1. La posición del consumidor es un offset consultable e independiente de los mensajes, **asserteable desde un
-   test**: así se demuestra la reentrega tras una caída. En RabbitMQ la evidencia es el flag `redelivered`
-   dentro del consumidor — alcanza, pero no es un valor inspeccionable.
-2. Consumir no borra, así que el log permite reconstruir la historia de una orden.
+1. Nos permite de manera consultiva saber el histórico de los mensajes y podemos reconstruir el ciclo de vida
+   de una orden en un tiempo determinado, ya que existe la política de retención y es configurable, no queda
+   para siempre. Mientras que Rabbit una vez recibido el ack borra el mensaje.
+   Viniendo del lado bancario, que en procesos no solo de auditoría, sino también en algún proceso judicial
+   nos han pedido poder armar el ciclo de vida de una transacción desde su login hasta que se otorga un
+   préstamo por ejemplo, valoro mucho el hecho de reconstruir el ciclo de vida de la operación o transacción
+   porque podemos saber exactamente en dónde estuvo la falla.
+2. Nos permite consultar el offset para poder comprobar mediante testing que la reentrega se realizó, y en el
+   caso correcto que no aplicamos el mismo ER reentregado (lo protege la idempotencia del dato durable en
+   nuestra PostgreSQL) y es algo que debemos asegurar, en cambio Rabbit sólo nos agrega al mensaje un campo
+   booleano de `redelivered` y en ese caso tenemos que confiar en un log en caso de estar viendo en runtime y
+   nos hace más complejo comprobarlo.
 
-**Qué cubre, incondicionalmente.** Reentrega mientras el offset no se commitee; orden dentro de la partición;
-una partición asignada a un solo consumidor, con failover; y *fencing* del commit de un consumidor con
-generación caducada tras un rebalance.
+**Se resigna frente a RabbitMQ.**
 
-**Qué no cubre.** Kafka no tiene visibilidad sobre PostgreSQL: lo que un consumidor zombie ya escribió
-sobrevive a su propio fencing. La aplicación única de un ER y la alineación contador/ledger son barreras
-durables en la base (D-002, D-003, D-004).
+1. La DLQ conlleva una configuración manual.
+2. El `docker-compose` es un poco más pesado, trivial.
 
-**Qué depende de configuración aún abierta.** Que un mensaje no se pierda **ante una falla del broker** no es
-automático: depende de `acks`, factor de replicación y `min.insync.replicas`. Este ejercicio corre un Kafka de
-un solo nodo, con replicación 1, así que una falla del broker **sí** implica pérdida. Las garantías demostradas
-se acotan deliberadamente a caídas del consumidor y reentregas. La granularidad del commit de offset se decide
-en D-003.
+**Evidencia que la validará.**
 
-**Se resigna frente a RabbitMQ.** La dead-letter hay que construirla; el `docker-compose` es más pesado.
+1. Dos instancias con órdenes intercaladas conservando el orden interno de cada una; y una caída entre el
+   commit de PostgreSQL y el del offset, comparando el offset commiteado antes y después, con una sola entrada
+   de ledger resultante.
 
-**Límites del problema, con cualquiera de los dos brokers.** Un ER permanentemente inválido frena su partición
-y con ella a las órdenes co-particionadas: RabbitMQ sólo lo evitaría agregando concurrencia con serialización
-propia por clave, o con reintento diferido que rompería la secuencia de la orden. El paralelismo tiene techo en
-la cantidad de particiones, que se mantiene fija. La retención es una política, no un archivo permanente.
+**Supuestos.**
 
-**Evidencia que la validará.** Dos instancias con órdenes intercaladas conservando el orden interno de cada
-una; y una caída entre el commit de PostgreSQL y el del offset, comparando el offset commiteado antes y
-después, con una sola entrada de ledger resultante.
+A raíz de las garantías en el enunciado: se va a correr un nodo con replicación 1, sé que eso pierde ante falla
+del broker, lo dejo así porque el ejercicio acota a caídas del servicio y no amerita configuración de un
+sistema de resiliencia ante caída del broker.
 
 ---
 
