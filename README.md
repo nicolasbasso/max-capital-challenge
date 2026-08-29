@@ -54,6 +54,23 @@ Compila, corre los tests y empaqueta. Debe terminar en `BUILD SUCCESS`.
 Levanta el servicio en `http://localhost:8080`. Todavía no expone endpoints de negocio: hoy
 sólo demuestra que el contexto de Spring levanta.
 
+### Mutation testing
+
+```bash
+./mvnw test-compile org.pitest:pitest-maven:mutationCoverage
+```
+
+Genera el reporte en `target/pit-reports/`. No está atado a ninguna fase del ciclo de vida, así que no
+encarece un `verify` normal.
+
+La pregunta que responde no es *cuánto código tocan los tests*, sino **si los tests detectan un cambio de
+comportamiento**. PIT altera el bytecode (invierte condiciones, cambia retornos, elimina llamadas) y verifica
+que algún test falle. Un mutante que sobrevive es una línea que se puede romper sin que ninguna prueba se
+entere.
+
+Mientras no exista lógica de dominio no se generan mutantes. El umbral de mutation score se activa junto con
+la máquina de estados de la orden.
+
 ### Variables de entorno
 
 | Variable | Default | Para qué |
