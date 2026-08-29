@@ -9,9 +9,18 @@ de alcance, se declara acá en vez de simularlo.
 
 ## Estado de las decisiones
 
+Una decisión atraviesa cuatro estados. La distinción importa: elegir no es lo mismo que haber demostrado.
+
+| Estado | Significado |
+|---|---|
+| **Abierta** | La pregunta está formulada; no hay elección tomada. |
+| **Elegida** | Hay una opción escogida y justificada, pero **la evidencia todavía no existe**. |
+| **Implementada** | El mecanismo está en el código. |
+| **Validada** | Existe una prueba reproducible que demuestra la garantía. |
+
 | ID | Decisión | Estado | Evidencia |
 |---|---|---|---|
-| D-001 | Broker, particionado y secuencia por orden | **Aceptada** | Pendiente: assert de offsets en T4.x / T5.3 |
+| D-001 | Broker, particionado y secuencia por orden | **Elegida** | Pendiente: assert de offsets en T4.x / T5.3 |
 | D-002 | Identidad individual del ER y clave de deduplicación | Abierta | — |
 | D-003 | Frontera transaccional, ACK/offset y recuperación | Abierta | — |
 | D-004 | Modelo persistente de orden, ledger y concurrencia | Abierta | — |
@@ -24,7 +33,7 @@ de alcance, se declara acá en vez de simularlo.
 
 ## D-001 - Broker, particionado y secuencia por orden
 
-**Estado:** aceptada.
+**Estado:** elegida. La opción está escogida y justificada; la evidencia que la valida todavía no existe.
 
 **Requisito.** Los ER de una misma orden deben aplicarse en su secuencia de emisión; órdenes distintas deben
 avanzar en paralelo; dos instancias consumen el mismo flujo y debe existir failover.
@@ -45,9 +54,28 @@ manejo de offsets propio sin resolver nada que las otras dos alternativas no res
   failover automático.
 - `enable.auto.commit=false`. El offset se commitea **después** del commit de la transacción en PostgreSQL.
 
-**Qué cubre el broker.** El mensaje no se pierde y se reentrega; el orden por orden se preserva; una sola
-instancia consume una orden a la vez; un consumidor con generación caducada tras un rebalance queda *fenced* y
-su commit de offset es rechazado.
+**Qué cubre el broker, y bajo qué condiciones.** Conviene separar lo que vale siempre de lo que depende de
+configuración todavía no decidida.
+
+*Incondicional, por el modelo de Kafka:*
+
+- **Reentrega ante fallo del consumidor:** si el offset no se commitea, el registro se vuelve a leer. Esto no
+  depende de configuración.
+- **Orden dentro de la partición:** los ER de una misma orden se entregan en el orden en que se escribieron.
+- **Exclusividad:** una partición se asigna a un solo consumidor del grupo a la vez, con failover.
+- **Fencing:** un consumidor con generación caducada tras un rebalance ve rechazado su commit de offset.
+
+*Condicional, y todavía sin decidir:*
+
+- **Que el mensaje no se pierda ante una falla del broker** no es una propiedad automática: depende de los
+  `acks` del productor, del factor de replicación, de `min.insync.replicas` y de la política de retención.
+  Este ejercicio levanta un Kafka de un solo nodo, de modo que el factor de replicación será 1 y **una falla
+  del broker sí implica pérdida**. El alcance que se declara es acotado a propósito: las garantías demostradas
+  cubren **caídas del consumidor y reentregas**, no fallas del broker ni del disco. Afirmar lo contrario sería
+  reclamar una durabilidad que la topología del ejercicio no tiene.
+- **La granularidad del commit de offset.** `enable.auto.commit=false` desactiva el commit automático, pero no
+  define si el offset se confirma por registro, por lote o manualmente; Spring Kafka usa `BATCH` por defecto.
+  Esa elección determina el tamaño exacto de la ventana de reentrega y se decide en **D-003**.
 
 **Qué NO cubre el broker.** Kafka no tiene visibilidad sobre PostgreSQL. Un consumidor zombie puede haber
 commiteado en la base antes de ser expulsado, y ese registro queda escrito. La aplicación única de un ER y la
@@ -111,6 +139,12 @@ entrada de ledger y un contador que no se incrementa dos veces.
 **Pregunta que debe responder:** ¿cuál es el resultado previsto ante una caída en cada ventana — antes de la
 transacción, dentro de la transacción, después del commit y antes del ACK/commit de offset? ¿Por qué ninguna
 de esas ventanas pierde ni duplica un ER?
+
+**Sub-decisión heredada de D-001:** la granularidad del commit de offset. Desactivar el commit automático no
+define si el offset se confirma por registro, por lote o manualmente. Spring Kafka usa `BATCH` por defecto, lo
+que confirma el lote entero después de procesarlo: una caída a mitad del lote reentrega **todos** sus
+registros, no sólo el que faltaba. La elección determina el tamaño exacto de la ventana de reentrega y por lo
+tanto cuántas veces se ejercita la barrera de idempotencia.
 
 **Evidencia que la validará:** una falla inyectada en cada ventana, con el resultado predicho antes de
 ejecutarla y verificado después.
