@@ -10,9 +10,11 @@ La traducción del enunciado a compromisos verificables está en
 ## Estado actual
 
 > **Slice 0 - andamiaje.** Todavía no hay ingesta, persistencia ni endpoint de consulta.
-> Lo que existe hoy es un servicio que arranca y un build verificable. Las decisiones de
-> arquitectura (broker, persistencia, idempotencia, settlement) están **abiertas** y
-> documentadas como preguntas en `DECISIONS.md`, no como conclusiones.
+> Lo que existe hoy es un servicio que arranca y un build verificable.
+>
+> El broker ya está **elegido** (Kafka, D-001), con su justificación y sus trade-offs escritos, pero la
+> evidencia que lo valida todavía no existe. Las demás decisiones —persistencia, idempotencia, errores,
+> settlement— siguen **abiertas** y documentadas como preguntas en `DECISIONS.md`, no como conclusiones.
 
 Este README se completa con los escenarios de demostración a medida que cada garantía se
 implementa y se demuestra. No describe capacidades que el código todavía no tenga.

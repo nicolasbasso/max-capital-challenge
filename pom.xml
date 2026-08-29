@@ -24,9 +24,10 @@
   <dependencies>
     <!--
       Dependencias deliberadamente minimas.
-      No se agregan cliente de broker ni persistencia todavia: D-001 (broker) y D-004
-      (motor de persistencia) siguen abiertas en DECISIONS.md. Agregarlas ahora seria
-      cerrar por inercia una decision que el enunciado pide justificar.
+      D-001 ya eligio Kafka, pero el cliente se agrega recien en el slice que lo usa,
+      junto con la prueba que demuestra la garantia. D-004 (motor de persistencia) sigue
+      abierta: agregarla ahora seria cerrar por inercia una decision que el enunciado
+      pide justificar.
     -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
