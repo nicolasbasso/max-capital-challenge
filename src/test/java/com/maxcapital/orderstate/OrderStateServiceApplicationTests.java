@@ -2,20 +2,10 @@ package com.maxcapital.orderstate;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.test.context.SpringBootTest;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * Slice 0: el contexto de Spring levanta y el servicio arranca.
- *
- * No prueba ninguna garantia del challenge todavia; su unico proposito es que el
- * andamiaje sea verificable antes de que exista logica encima. Si este test se rompe,
- * el problema es del entorno o del wiring, nunca del dominio.
- */
-@SpringBootTest
-class OrderStateServiceApplicationTests {
-
+class OrderStateServiceApplicationTests extends IntegrationTestBase {
     @Value("${spring.application.name}")
     private String applicationName;
 

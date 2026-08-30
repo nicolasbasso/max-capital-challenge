@@ -9,12 +9,12 @@ La traducción del enunciado a compromisos verificables está en
 
 ## Estado actual
 
-> **Slice 0 - andamiaje.** Todavía no hay ingesta, persistencia ni endpoint de consulta.
-> Lo que existe hoy es un servicio que arranca y un build verificable.
+> **Slice 1 - un ER recorre el sistema.** Un `NEW` publicado en Kafka se consume, se persiste como orden
+> con su entrada de ledger, y se puede consultar por HTTP.
 >
-> El broker ya está **elegido** (Kafka, D-001), con su justificación y sus trade-offs escritos, pero la
-> evidencia que lo valida todavía no existe. Las demás decisiones —persistencia, idempotencia, errores,
-> settlement— siguen **abiertas** y documentadas como preguntas en `DECISIONS.md`, no como conclusiones.
+> Todavía **no** están: la máquina de estados y la terminalidad (D-005), las dos instancias en paralelo,
+> las fallas inyectadas, el manejo de errores y cuarentena (D-006), y el settlement (D-007). Esas
+> decisiones siguen abiertas y documentadas como preguntas en `DECISIONS.md`, no como conclusiones.
 
 Este README se completa con los escenarios de demostración a medida que cada garantía se
 implementa y se demuestra. No describe capacidades que el código todavía no tenga.
@@ -73,12 +73,137 @@ entere.
 Mientras no exista lógica de dominio no se generan mutantes. El umbral de mutation score se activa junto con
 la máquina de estados de la orden.
 
+### Levantar la infraestructura
+
+```bash
+docker compose up -d
+```
+
+Levanta PostgreSQL en el puerto `5433` y Kafka en el `19092`. Los puertos y los nombres de contenedor son
+propios del proyecto para no colisionar con otros stacks.
+
+```bash
+docker compose down -v
+```
+
+Baja todo y borra el volumen de datos.
+
+### Consultar una orden
+
+```bash
+curl -s http://localhost:8080/orders/13144742 | jq
+```
+
+Devuelve estado, cantidad de ejecuciones aplicadas y el ledger en orden de inserción. Una orden inexistente
+devuelve `404` con el código `ORDER_NOT_FOUND`.
+
 ### Variables de entorno
 
 | Variable | Default | Para qué |
 |---|---|---|
 | `SERVER_PORT` | `8080` | Puerto HTTP. |
 | `APP_INSTANCE_ID` | `local` | Identifica la instancia en cada línea de log. Permite correlacionar qué orden procesó cuál de las dos instancias cuando haya que demostrarlo. |
+
+## Ejercitar los escenarios a mano
+
+Todo lo de abajo está verificado; los comandos se pueden copiar tal cual.
+
+### Preparar
+
+```bash
+docker compose up -d
+./mvnw clean package
+java -jar target/order-state-service-0.0.1-SNAPSHOT.jar
+```
+
+### Publicar un execution report
+
+La key del mensaje es el `numericOrderId`: es lo que hace que todos los ER de una orden caigan en
+la misma partición.
+
+```bash
+echo '13144742:{"fixId":"FIX-0001","numericOrderId":13144742,"status":"NEW","ticker":"VSCPC"}' \
+  | docker exec -i maxcapital-kafka /opt/kafka/bin/kafka-console-producer.sh \
+      --bootstrap-server localhost:9092 --topic execution-reports \
+      --property parse.key=true --property key.separator=:
+```
+
+En el log del servicio:
+
+```
+INFO ExecutionReportConsumer - applied numericOrderId=13144742 fixId=FIX-0001 partition=2 offset=0
+```
+
+### Consultar la orden
+
+```bash
+curl -s http://localhost:8080/orders/13144742 | jq
+```
+
+```json
+{
+  "numericOrderId": 13144742,
+  "status": "NEW",
+  "appliedExecutions": 1,
+  "ledger": [
+    { "id": 1, "fixId": "FIX-0001", "status": "NEW", "recordedAt": "..." }
+  ]
+}
+```
+
+Una orden inexistente devuelve `404` con `ORDER_NOT_FOUND`.
+
+### Duplicado
+
+Publicar **exactamente el mismo mensaje** otra vez. El servicio lo detecta y no lo aplica:
+
+```
+INFO ExecutionReportConsumer - duplicate ignored numericOrderId=13144742 fixId=FIX-0001 partition=2 offset=1
+```
+
+El estado no cambia: `appliedExecutions` sigue en 1 y el ledger sigue con una entrada.
+
+### Ver la evidencia en los tres lugares
+
+Esta es la parte que importa: los tres números cuentan la misma historia desde sistemas distintos.
+
+**Cuántos mensajes hay en el topic y hasta dónde llegó el consumidor:**
+
+```bash
+docker exec maxcapital-kafka /opt/kafka/bin/kafka-consumer-groups.sh \
+  --bootstrap-server localhost:9092 --describe --group order-state-service
+```
+
+```
+GROUP                TOPIC              PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG
+order-state-service  execution-reports  2          2               2               0
+```
+
+**Los mensajes siguen en el log, consumidos y todo:**
+
+```bash
+docker exec maxcapital-kafka /opt/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server localhost:9092 --topic execution-reports \
+  --from-beginning --timeout-ms 4000 --property print.key=true --property print.partition=true
+```
+
+**Y lo que realmente se aplicó:**
+
+```bash
+docker exec maxcapital-postgres psql -U orderstate -d orderstate \
+  -c "SELECT numeric_order_id, status, applied_executions FROM orders;" \
+  -c "SELECT id, numeric_order_id, fix_id, status FROM execution_ledger ORDER BY id;"
+```
+
+Dos mensajes consumidos, una sola aplicación. La barrera que lo impide es la restricción única:
+
+```bash
+docker exec maxcapital-postgres psql -U orderstate -d orderstate -c "\d execution_ledger"
+```
+
+```
+"uq_execution_ledger_order_fix" UNIQUE CONSTRAINT, btree (numeric_order_id, fix_id)
+```
 
 ## Verificación de Slice 0
 
