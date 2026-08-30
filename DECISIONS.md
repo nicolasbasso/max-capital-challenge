@@ -92,40 +92,34 @@ sistema de resiliencia ante caída del broker.
 **Qué protege.** La condición de *"exactamente una vez"* de la invariante de secuencia, en
 [`docs/acceptance-matrix.md`](./docs/acceptance-matrix.md).
 
-**Decisión.** Clave compuesta `(numericOrderId, fixId)`, con restricción de unicidad durable en PostgreSQL,
-sin hashear.
+**Decisión.** Clave compuesta `(numericOrderId, fixId)`, con restricción de unicidad durable en PostgreSQL.
 
-**Por qué compuesta.** El enunciado no garantiza que `fixId` sea único globalmente. La clave compuesta es
-correcta en los dos escenarios: si lo es, funciona; si sólo es único dentro de la orden, es la única que
-funciona.
+**Por qué.**
 
-**Por qué `fixId` y no `secondaryTradeId`,** que el enunciado anota como identidad para dedup: todos los ER son
-mensajes, pero no todos son ejecuciones — un `NEW` y un `CANCELLED` no operan nada. Como se exige una entrada
-de ledger por ER **efectivamente aplicado** y no por ejecución, la clave tiene que identificar también a esos.
+1. Elegí un ID compuesto porque no tenía un campo que sea único global dicho por el enunciado, por eso decidí
+   tener el número de orden + el id del mensaje. Además, nos da visibilidad de lo procesado a simple vista en
+   la base de datos.
 
-**Por qué no el offset de Kafka.** No cubre la republicación del emisor, que el enunciado distingue de la
-reentrega: mismo hecho de negocio, dos offsets. Y metería un dato del transporte dentro del dominio, cuando el
-requisito de idempotencia es anterior a la elección de broker. De ahí la regla: **la clave sale del payload,
-nunca del transporte** — un campo del payload es idéntico en los dos casos.
+   Analicé también el `secondaryTradeId` pero asumí que era un spanId, por ende iba a ser distinto por cada
+   estado (`NEW`, `PARTIALLY_FILLED` y `FILLED`), además quizás en estados que no impacten al proceso no se
+   envía por ejemplo: `NEW` o `CANCELLED`, y yo necesito marcar como único cada ER no importa si procesa
+   porque hay que sumar uno al ledger.
 
-**Identidad, no ordinalidad.** No hay número secuencial en el payload, y `status` no ordena parciales
-repetidos. No hace falta: el orden lo garantiza D-001. La clave sólo responde *"¿ya lo apliqué?"*.
+   Por otro lado, también se me ocurrió el offset de Kafka, donde asumí que el `fixId` se mantendría del lado
+   del cliente si llegara a duplicar el mensaje; en ese caso el offset sería distinto y duplicaría la entrada.
+   Ahí fue donde entendí que un dato del "transporte" no me serviría, porque metería el transporte dentro del
+   dominio.
 
-**Sin hash.** Una colisión sería una pérdida silenciosa, y la clave natural es legible al cruzar el ledger
-contra el topic para demostrar la ventana de caída.
+2. Estoy buscando identidad en el mensaje, no un orden o cardinalidad: el orden me lo da el broker (Kafka en
+   este caso).
 
-**Supuestos declarados.** `fixId` está presente y no vacío en todo ER, incluidos `NEW` y `CANCELLED`; y un
-duplicado se republica idéntico, `fixId` incluido, que es como lo emite el generador determinístico del
-ejercicio. No hay documentación del formato más allá del enunciado, que autoriza a resolver la duda y anotar
-la suposición.
+**Qué asumí.**
 
-**Si el supuesto falla.** Un `fixId` ausente o vacío es un error permanente: se preserva en cuarentena y la
-orden queda marcada como explícitamente incompleta. Ni descarte silencioso ni aplicación sin deduplicar.
-El mecanismo se define en D-006. El supuesto es barato porque falla ruidoso: si faltara sistemáticamente,
-todas las órdenes irían a cuarentena en su primer ER.
-
-**Límite declarado.** Si un emisor real asignara un `fixId` nuevo en cada transmisión del mismo hecho, la clave
-debería moverse a `secondaryTradeId`, con su probable ausencia en los ER que no ejecutan.
+1. `fixId` identificador del mensaje.
+2. `fixId` siempre presente. Si no viene, DLQ + orden marcada como incompleta.
+3. Un duplicado se publica idéntico en su payload.
+4. `secondaryTradeId` id por estado de procesamiento de la orden, un `spanId`; es decir, vacío en estados
+   `NEW` y `CANCELLED`.
 
 **Evidencia que la validará.** El mismo ER entregado dos veces —por reentrega tras una caída y por
 republicación del emisor— produce una sola entrada de ledger y un solo incremento del contador.
