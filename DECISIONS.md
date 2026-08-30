@@ -25,7 +25,7 @@ Una decisión atraviesa cuatro estados. La distinción importa: elegir no es lo 
 |---|---|---|---|
 | D-001 | Broker, particionado y secuencia por orden | **Elegida** | Pendiente: assert de offsets en T4.x / T5.3 |
 | D-002 | Identidad individual del ER y clave de deduplicación | **Elegida** | Pendiente: reentrega y republicación en T3.2 |
-| D-003 | Frontera transaccional, ACK/offset y recuperación | Abierta | — |
+| D-003 | Frontera transaccional, ACK/offset y recuperación | **Elegida** | Pendiente: fallas inyectadas por ventana en T5.2-T5.4 |
 | D-004 | Modelo persistente de orden, ledger y concurrencia | Abierta | — |
 | D-005 | Máquina de estados y terminalidad | Abierta | — |
 | D-006 | Errores transitorios, permanentes y orden incompleta | Abierta | — |
@@ -128,20 +128,54 @@ republicación del emisor— produce una sola entrada de ledger y un solo increm
 
 ## D-003 - Frontera transaccional, ACK/offset y recuperación
 
-**Pregunta que debe responder:** ¿cuál es el resultado previsto ante una caída en cada ventana — antes de la
-transacción, dentro de la transacción, después del commit y antes del ACK/commit de offset? ¿Por qué ninguna
-de esas ventanas pierde ni duplica un ER?
+**Estado:** elegida. La evidencia que la valida todavía no existe.
 
-**Sub-decisión heredada de D-001:** la granularidad del commit de offset. Desactivar el commit automático no
-define si el offset se confirma por registro, por lote o manualmente. Spring Kafka usa `BATCH` por defecto, lo
-que confirma el lote entero después de procesarlo: una caída a mitad del lote reentrega **todos** sus
-registros, no sólo el que faltaba. La elección determina el tamaño exacto de la ventana de reentrega y por lo
-tanto cuántas veces se ejercita la barrera de idempotencia.
+**Requisito.** Una caída a mitad de procesamiento no puede perder ni aplicar dos veces un ER. El commit en
+PostgreSQL y el commit del offset son dos sistemas distintos y no son atómicos entre sí: siempre queda una
+ventana entre uno y otro.
 
-**Evidencia que la validará:** una falla inyectada en cada ventana, con el resultado predicho antes de
-ejecutarla y verificado después.
+**Decisión.**
 
-**Estado:** abierta.
+1. La transacción en PostgreSQL va primero; el commit del offset después.
+2. Dentro de la transacción: leer el estado persistido, insertar en el ledger, actualizar estado y contador.
+3. El `INSERT` en el ledger lleva la restricción única `(numericOrderId, fixId)` de D-002. Esa restricción es
+   la barrera.
+4. Se intenta el `INSERT` y el duplicado se maneja fuera de la transacción.
+5. `AckMode.MANUAL_IMMEDIATE`: un commit por registro, invocado explícitamente después de que la transacción
+   cerró.
+
+**Ventanas de falla.**
+
+| Se cae | En PostgreSQL | En Kafka | Al recuperarse | Qué lo salva |
+|---|---|---|---|---|
+| Antes de abrir la transacción | nada | offset viejo | se procesa normal | nada, no hay qué deshacer |
+| Con la transacción abierta | nada | offset viejo | se procesa normal | el rollback de PostgreSQL |
+| Después del commit, antes del offset | el ER aplicado | offset viejo | se reentrega y se detecta duplicado | la restricción única |
+| Después del commit del offset | el ER aplicado | offset nuevo | no se reentrega | nada, ya cerró |
+
+**Por qué así.**
+
+- Luego de validar los distintos escenarios entendí que si bien `AckMode.RECORD` me daría en el mismo momento
+  el commit del offset que `AckMode.MANUAL_IMMEDIATE`, tengo la posibilidad de dejar explícito que después de
+  un catch y logueo va el commit del offset, y no darlo por hecho por Spring. Por esa razón, decidí dejarlo
+  explícito en el código antes que depender de Spring para los defaults.
+- También evalué la posibilidad de una validación por base de datos antes de arrancar a procesar, pero
+  entendí que si 2 instancias llegaran a tener el mismo evento en el mismo momento les daría que no existe, y
+  sólo la constraint en la base de datos me daría la verdad, dejando al motor responsable de la validación de
+  duplicidad.
+- El offset, después e independiente del proceso, me permite aplicar las validaciones de constraint contra
+  idempotencia de manera correcta. Nunca voy a dar por finalizado un mensaje si no hice el procesamiento más
+  su persistencia en PostgreSQL. De otra forma —*offset primero*— tengo riesgo de perder mensajes. En esta
+  alternativa está la posibilidad de duplicidad, que atajamos con la idempotencia del motor mediante la unique
+  key.
+
+**Qué asumí.**
+
+- Por el nivel de carga de este challenge no vale la pena utilizar lotes para procesar los eventos.
+
+**Evidencia que la validará.** Una falla inyectada en cada ventana, prediciendo el resultado antes de
+ejecutarla. La crítica es la tercera: caída entre el commit de PostgreSQL y el del offset, con el ER
+reentregado y el ledger todavía en una sola entrada.
 
 ---
 
