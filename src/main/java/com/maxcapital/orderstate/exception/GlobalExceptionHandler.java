@@ -13,8 +13,7 @@ import java.time.Instant;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
     @ExceptionHandler(BusinessException.class)
-    public ResponseEntity<ApiErrorResponse> handleBusinessException(BusinessException ex,
-                                                                    HttpServletRequest request) {
+    public ResponseEntity<ApiErrorResponse> handleBusinessException(BusinessException ex, HttpServletRequest request) {
         return ResponseEntity.status(ex.getStatus())
                 .body(buildErrorResponse(ex.getStatus(), ex.getCode(), ex.getMessage(), request.getRequestURI()));
     }
@@ -23,8 +22,7 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiErrorResponse> handleUnexpected(Exception ex, HttpServletRequest request) {
         log.error("Unexpected error on {}", request.getRequestURI(), ex);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(buildErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR",
-                        "Unexpected error", request.getRequestURI()));
+                .body(buildErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "Unexpected error", request.getRequestURI()));
     }
 
     private ApiErrorResponse buildErrorResponse(HttpStatus status, String error, String message, String path) {

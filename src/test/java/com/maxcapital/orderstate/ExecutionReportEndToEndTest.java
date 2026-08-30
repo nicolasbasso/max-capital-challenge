@@ -53,6 +53,9 @@ class ExecutionReportEndToEndTest extends IntegrationTestBase {
                 .as("una entrada de ledger por ER efectivamente aplicado")
                 .hasSize(1);
         assertThat(entries.getFirst().getFixId()).isEqualTo(fixId);
+        assertThat(entries.getFirst().getRecordedAt())
+                .as("lo escribe la base, no la JVM: si la entidad no lo relee queda en null")
+                .isNotNull();
 
         ResponseEntity<OrderResponse> response =
                 http.getForEntity("/orders/" + numericOrderId, OrderResponse.class);

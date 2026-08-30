@@ -2,6 +2,8 @@ package com.maxcapital.orderstate.model;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.Generated;
+import org.hibernate.generator.EventType;
 
 import java.time.Instant;
 
@@ -18,6 +20,7 @@ import java.time.Instant;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 public class ExecutionLedgerEntry {
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -32,7 +35,8 @@ public class ExecutionLedgerEntry {
     @Column(nullable = false, length = 32)
     private OrderStatus status;
 
-    @Column(name = "recorded_at", nullable = false)
+    @Generated(event = EventType.INSERT)
+    @Column(name = "recorded_at", nullable = false, insertable = false, updatable = false)
     private Instant recordedAt;
 
     public static ExecutionLedgerEntry applied(Long numericOrderId, String fixId, OrderStatus status) {
@@ -40,7 +44,6 @@ public class ExecutionLedgerEntry {
                 .numericOrderId(numericOrderId)
                 .fixId(fixId)
                 .status(status)
-                .recordedAt(Instant.now())
                 .build();
     }
 }

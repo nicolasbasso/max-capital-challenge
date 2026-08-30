@@ -26,3 +26,20 @@ CREATE TABLE execution_ledger (
 );
 
 CREATE INDEX idx_execution_ledger_order ON execution_ledger (numeric_order_id, id);
+
+-- Todos los timestamps los escribe la base. Con dos instancias corriendo, el reloj de cada JVM
+-- puede estar corrido; el de la base es el unico que las dos comparten.
+-- created_at y recorded_at se escriben una sola vez y les alcanza el DEFAULT.
+-- updated_at cambia en cada update, asi que necesita el trigger.
+
+CREATE FUNCTION set_updated_at() RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_orders_updated_at
+    BEFORE UPDATE ON orders
+    FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();

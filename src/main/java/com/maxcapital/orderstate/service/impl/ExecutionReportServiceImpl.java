@@ -22,12 +22,10 @@ public class ExecutionReportServiceImpl implements ExecutionReportService {
     @Transactional
     public void apply(ExecutionReportMessage report) {
         Order order = orderRepository.findById(report.numericOrderId())
-                .orElseGet(() -> orderRepository.saveAndFlush(
-                        Order.opening(report.numericOrderId(), report.status())));
+                .orElseGet(() -> orderRepository.saveAndFlush(Order.opening(report.numericOrderId(), report.status())));
 
         try {
-            executionLedgerRepository.saveAndFlush(ExecutionLedgerEntry.applied(
-                    report.numericOrderId(), report.fixId(), report.status()));
+            executionLedgerRepository.saveAndFlush(ExecutionLedgerEntry.applied(report.numericOrderId(), report.fixId(), report.status()));
         } catch (DataIntegrityViolationException alreadyApplied) {
             throw new DuplicateExecutionReportException(report.numericOrderId(), report.fixId());
         }

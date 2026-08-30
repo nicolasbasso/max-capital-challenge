@@ -20,19 +20,15 @@ public class ExecutionReportConsumer {
     private final ObjectMapper objectMapper;
 
     @KafkaListener(topics = "${app.kafka.execution-reports-topic}")
-    public void onExecutionReport(String payload,
-                                  @Header(KafkaHeaders.RECEIVED_PARTITION) int partition,
-                                  @Header(KafkaHeaders.OFFSET) long offset,
-                                  Acknowledgment acknowledgment) throws Exception {
+    public void onExecutionReport(String payload, @Header(KafkaHeaders.RECEIVED_PARTITION) int partition,
+                                  @Header(KafkaHeaders.OFFSET) long offset, Acknowledgment acknowledgment) throws Exception {
         ExecutionReportMessage report = objectMapper.readValue(payload, ExecutionReportMessage.class);
 
         try {
             executionReportService.apply(report);
-            log.info("applied numericOrderId={} fixId={} partition={} offset={}",
-                    report.numericOrderId(), report.fixId(), partition, offset);
+            log.info("applied numericOrderId={} fixId={} partition={} offset={}", report.numericOrderId(), report.fixId(), partition, offset);
         } catch (DuplicateExecutionReportException alreadyApplied) {
-            log.info("duplicate ignored numericOrderId={} fixId={} partition={} offset={}",
-                    report.numericOrderId(), report.fixId(), partition, offset);
+            log.info("duplicate ignored numericOrderId={} fixId={} partition={} offset={}", report.numericOrderId(), report.fixId(), partition, offset);
         }
 
         acknowledgment.acknowledge();
