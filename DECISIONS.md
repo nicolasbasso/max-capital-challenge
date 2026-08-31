@@ -26,7 +26,7 @@ Una decisión atraviesa cuatro estados. La distinción importa: elegir no es lo 
 | D-001 | Broker, particionado y secuencia por orden | **Elegida** | Pendiente: assert de offsets en T4.x / T5.3 |
 | D-002 | Identidad individual del ER y clave de deduplicación | **Elegida** | Pendiente: reentrega y republicación en T3.2 |
 | D-003 | Frontera transaccional, ACK/offset y recuperación | **Elegida** | Pendiente: fallas inyectadas por ventana en T5.2-T5.4 |
-| D-004 | Modelo persistente de orden, ledger y concurrencia | Abierta | — |
+| D-004 | Modelo persistente de orden, ledger y concurrencia | **Elegida** | Parcial: falta la de dos instancias reales (T4.4) |
 | D-005 | Máquina de estados y terminalidad | Abierta | — |
 | D-006 | Errores transitorios, permanentes y orden incompleta | Abierta | — |
 | D-007 | Settlement, outbox y deduplicación downstream | Abierta | — |
@@ -181,14 +181,32 @@ reentregado y el ledger todavía en una sola entrada.
 
 ## D-004 - Modelo persistente de orden, ledger y concurrencia
 
+**Estado:** elegida.
+
 **Pregunta que debe responder:** ¿cómo se persiste la orden y su ledger de modo que el contador de
 ejecuciones y la cantidad de entradas del ledger no puedan desalinearse, ni siquiera bajo intentos
 concurrentes de dos instancias? ¿Qué motor y por qué?
 
-**Evidencia que la validará:** intentos concurrentes sobre la misma orden no duplican entradas ni contador;
-el ledger se devuelve en orden de inserción.
+**Decisión**
 
-**Estado:** abierta.
+- PostgreSQL.
+- Dos tablas: `orders` (estado y contador) y `execution_ledger` (una entrada por ER aplicado).
+- Clave autoincremental `BIGSERIAL` en el ledger.
+- Restricción única `(numeric_order_id, fix_id)` — la misma de D-002.
+- Los timestamps los escribe la base: defaults en las columnas y un trigger para `updated_at`.
+
+**Por qué PostgreSQL**
+
+- No hubo una elección en verdad, yo necesitaba un motor que pueda realizar lo siguiente:
+  transacciones, una restricción única durable, y una clave autoincremental. La barrera de
+  idempotencia no puede vivir en memoria porque tiene que verla la otra instancia.
+  La elección nuevamente no fue por capacidad sino por practicidad a la hora de implementar,
+  configuración sencilla y conocida.
+- Gracias a las transacciones pude integrar el ledger a la operación, y con eso si falla algo se
+  hace rollback y no queda desfasada. La unión de esta transacción es el candado del contador.
+
+**Evidencia que la validará:** intentos concurrentes sobre la misma orden no duplican entradas ni
+contador; el ledger se devuelve en orden de inserción.
 
 ---
 
