@@ -27,7 +27,7 @@ Una decisión atraviesa cuatro estados. La distinción importa: elegir no es lo 
 | D-002 | Identidad individual del ER y clave de deduplicación | **Elegida** | Pendiente: reentrega y republicación en T3.2 |
 | D-003 | Frontera transaccional, ACK/offset y recuperación | **Elegida** | Pendiente: fallas inyectadas por ventana en T5.2-T5.4 |
 | D-004 | Modelo persistente de orden, ledger y concurrencia | **Elegida** | Parcial: falta la de dos instancias reales (T4.4) |
-| D-005 | Máquina de estados y terminalidad | Abierta | — |
+| D-005 | Máquina de estados y terminalidad | **Elegida** | Pendiente: se construye en el slice 2 |
 | D-006 | Errores transitorios, permanentes y orden incompleta | Abierta | — |
 | D-007 | Settlement, outbox y deduplicación downstream | Abierta | — |
 | D-008 | Alcance declarado y trabajo fuera de alcance | Abierta | — |
@@ -212,14 +212,54 @@ contador; el ledger se devuelve en orden de inserción.
 
 ## D-005 - Máquina de estados y terminalidad
 
+**Estado:** elegida.
+
 **Pregunta que debe responder:** ¿cómo se computa el nuevo estado a partir del estado ya persistido más el ER
 entrante, en vez de copiar el último mensaje? ¿Qué pasa con un ER que llega después de `FILLED` o
 `CANCELLED`, y por qué la detección de duplicado ocurre antes del rechazo por terminalidad?
 
+**Qué decidí**
+
+- Una orden **sólo se abre con un `NEW`**.
+- Todo ER que no se puede aplicar: no se aplica, se preserva, y la orden pasa a `INCOMPLETE`. (ver tabla)
+- `INCOMPLETE` es un valor de `OrderStatus`, que pasa a tener cinco.
+- Una orden `INCOMPLETE` queda **congelada**: no se le aplica nada más.
+
+| Desde ↓ / Llega → | `NEW` | `PARTIALLY_FILLED` | `FILLED` | `CANCELLED` |
+|---|---|---|---|---|
+| *(no existe)* | se abre | no se aplica | no se aplica | no se aplica |
+| `NEW` | no se aplica | se aplica | se aplica | se aplica |
+| `PARTIALLY_FILLED` | no se aplica | se aplica | se aplica | se aplica |
+| `FILLED` | no se aplica | no se aplica | no se aplica | no se aplica |
+| `CANCELLED` | no se aplica | no se aplica | no se aplica | no se aplica |
+| `INCOMPLETE` | no se aplica | no se aplica | no se aplica | no se aplica |
+
+Todo "no se aplica" es lo mismo: el ER se preserva y la orden queda `INCOMPLETE`.
+
+**Por qué**
+
+- El enunciado indicaba que una orden iniciaba con un `NEW`, si nos encontramos con un `NEW` posterior a
+  algún estado no es aplicable.
+- Agregamos el estado `INCOMPLETE` al enum de estados aunque no es un estado del proveedor porque ya no
+  estamos en su scope y es nuestro dominio, si bien representamos sus estados de manera correlativa este
+  estado nos da visibilidad al momento de querer recuperar una orden y saber si dejamos de confiar en ella.
+  Surgió de la prueba donde falló el `NEW` y recibimos `PARTIALLY_FILLED` que cuando la consultábamos nos
+  devolvía 404 not found y sí hubo una orden pero no se guardó.
+- La deduplicación de D-002 ocurre en el `INSERT` del ledger, que va antes de evaluar la transición. Si fuera
+  al revés, una reentrega del mismo `FILLED` —que es justo el escenario que el enunciado pide demostrar— se
+  leería como un ER posterior a un terminal y me congelaría una orden que se completó bien. Descartar ese
+  duplicado no es pérdida silenciosa: su contenido ya está aplicado.
+
+**Qué asumí**
+
+- Si no puedo aplicar un ER, la orden deja de ser confiable y prefiero pasar a un estado `INCOMPLETE`.
+- Aunque tenga una orden en un estado terminal (`FILLED` o `CANCELLED`) y reciba otro ER, esa orden pasa a
+  estado `INCOMPLETE`, no puedo distinguir por qué pasó eso y la orden deja de ser confiable. No puedo ni
+  ignorar el ER que vino luego ni percibir la orden como terminada.
+- Al poner un estado `INCOMPLETE` pierdo el último estado del mercado.
+
 **Evidencia que la validará:** ciclo de vida completo con contador y ledger alineados; ER posterior a un
 estado terminal no se aplica; reentrega del mismo ER terminal es un no-op y no un error.
-
-**Estado:** abierta.
 
 ---
 
