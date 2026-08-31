@@ -245,10 +245,9 @@ Todo "no se aplica" es lo mismo: el ER se preserva y la orden queda `INCOMPLETE`
   estado nos da visibilidad al momento de querer recuperar una orden y saber si dejamos de confiar en ella.
   Surgió de la prueba donde falló el `NEW` y recibimos `PARTIALLY_FILLED` que cuando la consultábamos nos
   devolvía 404 not found y sí hubo una orden pero no se guardó.
-- La deduplicación de D-002 ocurre en el `INSERT` del ledger, que va antes de evaluar la transición. Si fuera
-  al revés, una reentrega del mismo `FILLED` —que es justo el escenario que el enunciado pide demostrar— se
-  leería como un ER posterior a un terminal y me congelaría una orden que se completó bien. Descartar ese
-  duplicado no es pérdida silenciosa: su contenido ya está aplicado.
+- La detección del duplicado tiene que ocurrir primero en el escenario que llegue 2 veces el mismo ER de un
+  estado terminal. Porque tomando la premisa de antes esto sería un estado `INCOMPLETE` si no, y no es así:
+  es un ER que ya procesamos y no es pérdida si tampoco lo procesamos.
 
 **Qué asumí**
 
