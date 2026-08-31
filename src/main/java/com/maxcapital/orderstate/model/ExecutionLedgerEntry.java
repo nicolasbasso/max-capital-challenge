@@ -11,7 +11,7 @@ import java.time.Instant;
 @Table(
         name = "execution_ledger",
         uniqueConstraints = @UniqueConstraint(
-                name = "uq_execution_ledger_order_fix",
+                name = ExecutionLedgerEntry.UNIQUE_ORDER_FIX_ID,
                 columnNames = {"numeric_order_id", "fix_id"}
         )
 )
@@ -20,6 +20,8 @@ import java.time.Instant;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 public class ExecutionLedgerEntry {
+
+    public static final String UNIQUE_ORDER_FIX_ID = "uq_execution_ledger_order_fix";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

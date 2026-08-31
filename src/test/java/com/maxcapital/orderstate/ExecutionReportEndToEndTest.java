@@ -1,6 +1,7 @@
 package com.maxcapital.orderstate;
 
 import com.maxcapital.orderstate.dto.OrderResponse;
+import com.maxcapital.orderstate.exception.ApiErrorResponse;
 import com.maxcapital.orderstate.repository.ExecutionLedgerRepository;
 import com.maxcapital.orderstate.repository.OrderRepository;
 import org.junit.jupiter.api.Test;
@@ -69,9 +70,41 @@ class ExecutionReportEndToEndTest extends IntegrationTestBase {
     }
 
     @Test
-    void unaOrdenInexistenteDevuelve404() {
-        assertThat(http.getForEntity("/orders/999999999", String.class).getStatusCode())
-                .isEqualTo(HttpStatus.NOT_FOUND);
+    void unErInvalidoNoSePersisteNiSeConfundeConUnDuplicado() {
+        long numericOrderId = 90501L;
+
+        kafka.send(topic, String.valueOf(numericOrderId), """
+                {"fixId": "   ", "numericOrderId": %d, "status": "NEW"}
+                """.formatted(numericOrderId));
+
+        esperarUnPoco();
+
+        assertThat(orders.findById(numericOrderId))
+                .as("un fixId en blanco lo aceptaria la base: solo la validacion cableada lo frena")
+                .isEmpty();
+        assertThat(ledger.findByNumericOrderIdOrderByIdAsc(numericOrderId)).isEmpty();
+    }
+
+    private void esperarUnPoco() {
+        try {
+            Thread.sleep(6000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
+
+    @Test
+    void unaOrdenInexistenteDevuelve404ConSuCodigoDeError() {
+        ResponseEntity<ApiErrorResponse> response =
+                http.getForEntity("/orders/999999999", ApiErrorResponse.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().error()).isEqualTo("ORDER_NOT_FOUND");
+        assertThat(response.getBody().status()).isEqualTo(HttpStatus.NOT_FOUND.value());
+        assertThat(response.getBody().path()).isEqualTo("/orders/999999999");
+        assertThat(response.getBody().timestamp()).isNotNull();
     }
 
     private void esperarHasta(java.util.function.BooleanSupplier condicion) {

@@ -177,6 +177,7 @@
           <!-- La clase de arranque solo tiene main(); mutarla no dice nada del dominio. -->
           <excludedClasses>
             <param>com.maxcapital.orderstate.OrderStateServiceApplication</param>
+            <param>com.maxcapital.orderstate.config.*</param>
           </excludedClasses>
           <outputFormats>
             <param>HTML</param>
@@ -184,11 +185,12 @@
           </outputFormats>
           <timestampedReports>false</timestampedReports>
           <!--
-            Hoy no hay logica de dominio, asi que no hay mutantes que generar y PIT
-            fallaria. Se desactiva esa condicion hasta que exista la maquina de estados.
-            A partir del Slice 2 se activa <mutationThreshold> con un valor real.
+            Las clases de configuracion se excluyen: el contexto de Spring se construye una
+            vez y se cachea, asi que un mutante sobre un @Configuration nunca llega a
+            aplicarse y PIT lo reporta como sobreviviente aunque borrarlo rompa los tests.
+            Se verifico a mano que setValidator y el message converter hacen falta.
           -->
-          <failWhenNoMutations>false</failWhenNoMutations>
+          <mutationThreshold>75</mutationThreshold>
         </configuration>
       </plugin>
     </plugins>

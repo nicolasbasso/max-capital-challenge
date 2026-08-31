@@ -53,8 +53,8 @@ Compila, corre los tests y empaqueta. Debe terminar en `BUILD SUCCESS`.
 ./mvnw spring-boot:run
 ```
 
-Levanta el servicio en `http://localhost:8080`. Todavía no expone endpoints de negocio: hoy
-sólo demuestra que el contexto de Spring levanta.
+Levanta el servicio en `http://localhost:8080`. Necesita la infraestructura arriba
+(`docker compose up -d`).
 
 ### Mutation testing
 
@@ -162,6 +162,9 @@ INFO ExecutionReportConsumer - duplicate ignored numericOrderId=13144742 fixId=F
 ```
 
 El estado no cambia: `appliedExecutions` sigue en 1 y el ledger sigue con una entrada.
+
+Esto cubre el **duplicado del emisor**: el mismo ER publicado dos veces. La **reentrega tras una
+caída** entre el commit de PostgreSQL y el del offset todavía no está demostrada; es T5.3.
 
 ### Ver la evidencia en los tres lugares
 
