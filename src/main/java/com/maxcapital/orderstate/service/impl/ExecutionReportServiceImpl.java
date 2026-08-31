@@ -8,6 +8,7 @@ import com.maxcapital.orderstate.repository.ExecutionLedgerRepository;
 import com.maxcapital.orderstate.repository.OrderRepository;
 import com.maxcapital.orderstate.service.ExecutionReportService;
 import lombok.RequiredArgsConstructor;
+import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -15,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class ExecutionReportServiceImpl implements ExecutionReportService {
+
     private final OrderRepository orderRepository;
     private final ExecutionLedgerRepository executionLedgerRepository;
 
@@ -26,11 +28,19 @@ public class ExecutionReportServiceImpl implements ExecutionReportService {
 
         try {
             executionLedgerRepository.saveAndFlush(ExecutionLedgerEntry.applied(report.numericOrderId(), report.fixId(), report.status()));
-        } catch (DataIntegrityViolationException alreadyApplied) {
-            throw new DuplicateExecutionReportException(report.numericOrderId(), report.fixId());
+        } catch (DataIntegrityViolationException violation) {
+            if (isDuplicateExecutionReport(violation)) {
+                throw new DuplicateExecutionReportException(report.numericOrderId(), report.fixId());
+            }
+            throw violation;
         }
 
         order.applyExecution(report.status());
         orderRepository.save(order);
+    }
+
+    private static boolean isDuplicateExecutionReport(DataIntegrityViolationException failure) {
+        return failure.getCause() instanceof ConstraintViolationException cause
+                && ExecutionLedgerEntry.UNIQUE_ORDER_FIX_ID.equals(cause.getConstraintName());
     }
 }

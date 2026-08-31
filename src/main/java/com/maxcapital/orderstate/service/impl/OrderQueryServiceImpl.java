@@ -9,6 +9,7 @@ import com.maxcapital.orderstate.repository.OrderRepository;
 import com.maxcapital.orderstate.service.OrderQueryService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
@@ -20,7 +21,7 @@ public class OrderQueryServiceImpl implements OrderQueryService {
     private final ExecutionLedgerRepository executionLedgerRepository;
 
     @Override
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public OrderResponse getByNumericOrderId(Long numericOrderId) {
         Order order = orderRepository.findById(numericOrderId)
                 .orElseThrow(() -> new OrderNotFoundException(numericOrderId));
