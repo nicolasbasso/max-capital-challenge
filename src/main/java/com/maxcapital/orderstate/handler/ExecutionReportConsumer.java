@@ -6,6 +6,7 @@ import com.maxcapital.orderstate.service.ExecutionReportService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.kafka.support.KafkaHeaders;
@@ -22,10 +23,11 @@ public class ExecutionReportConsumer {
 
     @KafkaListener(topics = "${app.kafka.execution-reports-topic}")
     public void onExecutionReport(@Valid @Payload ExecutionReportMessage report,
+                                  ConsumerRecord<String, String> record,
                                   @Header(KafkaHeaders.RECEIVED_PARTITION) int partition,
                                   @Header(KafkaHeaders.OFFSET) long offset, Acknowledgment acknowledgment) {
         try {
-            executionReportService.apply(report);
+            executionReportService.apply(report, record.value());
             log.info("applied numericOrderId={} fixId={} partition={} offset={}", report.numericOrderId(), report.fixId(), partition, offset);
         } catch (DuplicateExecutionReportException alreadyApplied) {
             log.info("duplicate ignored numericOrderId={} fixId={} partition={} offset={}", report.numericOrderId(), report.fixId(), partition, offset);

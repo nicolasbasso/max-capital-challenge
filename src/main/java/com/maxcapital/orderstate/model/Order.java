@@ -26,20 +26,29 @@ public class Order {
     @Column(name = "applied_executions", nullable = false)
     private int appliedExecutions;
 
+    @Embedded
+    private ExecutionAmounts amounts;
+
     @Generated(event = {EventType.INSERT, EventType.UPDATE})
     @Column(name = "updated_at", nullable = false, insertable = false, updatable = false)
     private Instant updatedAt;
 
-    public static Order opening(Long numericOrderId, OrderStatus status) {
+    public static Order opening(Long numericOrderId) {
         return Order.builder()
                 .numericOrderId(numericOrderId)
-                .status(status)
+                .status(OrderStatus.NEW)
                 .appliedExecutions(0)
+                .amounts(ExecutionAmounts.zero())
                 .build();
     }
 
-    public void applyExecution(OrderStatus incoming) {
+    public void applyExecution(OrderStatus incoming, ExecutionAmounts amounts) {
         this.status = incoming;
         this.appliedExecutions = this.appliedExecutions + 1;
+        this.amounts = amounts;
+    }
+
+    public void freeze() {
+        this.status = OrderStatus.INCOMPLETE;
     }
 }

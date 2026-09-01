@@ -4,6 +4,7 @@ import com.maxcapital.orderstate.model.Order;
 import com.maxcapital.orderstate.model.OrderStatus;
 import lombok.Builder;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 @Builder
@@ -11,14 +12,22 @@ public record OrderResponse(
         Long numericOrderId,
         OrderStatus status,
         int appliedExecutions,
-        List<LedgerEntryResponse> ledger
+        BigDecimal nominalAmount,
+        BigDecimal accumulativeNominalAmount,
+        BigDecimal leavesNominalAmount,
+        List<LedgerEntryResponse> ledger,
+        List<QuarantinedEntryResponse> quarantine
 ) {
-    public static OrderResponse from(Order order, List<LedgerEntryResponse> ledger) {
+    public static OrderResponse from(Order order, List<LedgerEntryResponse> ledger, List<QuarantinedEntryResponse> quarantine) {
         return OrderResponse.builder()
                 .numericOrderId(order.getNumericOrderId())
                 .status(order.getStatus())
                 .appliedExecutions(order.getAppliedExecutions())
+                .nominalAmount(order.getAmounts().getNominalAmount())
+                .accumulativeNominalAmount(order.getAmounts().getAccumulativeNominalAmount())
+                .leavesNominalAmount(order.getAmounts().getLeavesNominalAmount())
                 .ledger(ledger)
+                .quarantine(quarantine)
                 .build();
     }
 }

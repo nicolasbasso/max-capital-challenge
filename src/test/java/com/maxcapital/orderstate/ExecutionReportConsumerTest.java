@@ -7,6 +7,7 @@ import com.maxcapital.orderstate.model.OrderStatus;
 import com.maxcapital.orderstate.service.ExecutionReportService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.kafka.support.Acknowledgment;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -19,7 +20,10 @@ class ExecutionReportConsumerTest {
     private ExecutionReportConsumer consumer;
 
     private static final ExecutionReportMessage REPORT =
-            new ExecutionReportMessage("FIX-1", 13144742L, OrderStatus.NEW);
+            ExecutionReports.er("FIX-1", 13144742L, OrderStatus.NEW);
+
+    private static final ConsumerRecord<String, String> RECORD =
+            new ConsumerRecord<>("execution-reports", 2, 100L, "13144742", ExecutionReports.raw(REPORT));
 
     @BeforeEach
     void setUp() {
@@ -30,18 +34,18 @@ class ExecutionReportConsumerTest {
 
     @Test
     void unErValidoSeAplicaYAvanzaElOffset() {
-        consumer.onExecutionReport(REPORT, 2, 100L, acknowledgment);
+        consumer.onExecutionReport(REPORT, RECORD, 2, 100L, acknowledgment);
 
-        verify(service).apply(REPORT);
+        verify(service).apply(REPORT, RECORD.value());
         verify(acknowledgment).acknowledge();
     }
 
     @Test
     void unDuplicadoNoEsUnaFallaYTambienAvanzaElOffset() {
         doThrow(new DuplicateExecutionReportException(13144742L, "FIX-1"))
-                .when(service).apply(any(ExecutionReportMessage.class));
+                .when(service).apply(any(ExecutionReportMessage.class), any(String.class));
 
-        consumer.onExecutionReport(REPORT, 2, 100L, acknowledgment);
+        consumer.onExecutionReport(REPORT, RECORD, 2, 100L, acknowledgment);
 
         verify(acknowledgment).acknowledge();
     }
@@ -49,10 +53,10 @@ class ExecutionReportConsumerTest {
     @Test
     void siLaAplicacionFallaDeVerdadElOffsetNoAvanza() {
         doThrow(new IllegalStateException("base caida"))
-                .when(service).apply(any(ExecutionReportMessage.class));
+                .when(service).apply(any(ExecutionReportMessage.class), any(String.class));
 
         try {
-            consumer.onExecutionReport(REPORT, 2, 100L, acknowledgment);
+            consumer.onExecutionReport(REPORT, RECORD, 2, 100L, acknowledgment);
         } catch (IllegalStateException expected) {
             // se deja propagar para que el error handler la tome
         }
