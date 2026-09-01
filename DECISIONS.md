@@ -28,7 +28,7 @@ Una decisión atraviesa cuatro estados. La distinción importa: elegir no es lo 
 | D-003 | Frontera transaccional, ACK/offset y recuperación | **Elegida** | Pendiente: fallas inyectadas por ventana en T5.2-T5.4 |
 | D-004 | Modelo persistente de orden, ledger y concurrencia | **Elegida** | Parcial: falta la de dos instancias reales (T4.4) |
 | D-005 | Máquina de estados y terminalidad | **Elegida** | Pendiente: se construye en el slice 2 |
-| D-006 | Errores transitorios, permanentes y orden incompleta | Abierta | — |
+| D-006 | Errores transitorios, permanentes y orden incompleta | **Elegida** | Parcial: la cuarentena ya existe; falta la dead-letter y el backoff |
 | D-007 | Settlement, outbox y deduplicación downstream | Abierta | — |
 | D-008 | Alcance declarado y trabajo fuera de alcance | Abierta | — |
 
@@ -116,7 +116,8 @@ sistema de resiliencia ante caída del broker.
 **Qué asumí.**
 
 1. `fixId` identificador del mensaje.
-2. `fixId` siempre presente. Si no viene, DLQ + orden marcada como incompleta.
+2. `fixId` siempre presente. Si no viene, va a la dead-letter; la orden no se marca, porque sin
+   `numericOrderId` no hay orden que identificar (ver D-006).
 3. Un duplicado se publica idéntico en su payload.
 4. `secondaryTradeId` id por estado de procesamiento de la orden, un `spanId`; es decir, vacío en estados
    `NEW` y `CANCELLED`.
@@ -264,14 +265,59 @@ estado terminal no se aplica; reentrega del mismo ER terminal es un no-op y no u
 
 ## D-006 - Errores transitorios, permanentes y orden incompleta
 
+**Estado:** elegida. La cuarentena y el error handler ya existen; la dead-letter y el backoff con pausa, no.
+
 **Pregunta que debe responder:** ¿cómo se distinguen errores transitorios de permanentes, y cómo se evita a
 la vez el descarte silencioso y el bloqueo indefinido del flujo? ¿Qué le pasa a una orden a la que le falta
 un ER, y por qué una DLQ por sí sola no la repara?
 
+| Qué pasó | ¿Reintenta? | Dónde queda el ER | Consumidor | La orden |
+|---|---|---|---|---|
+| Rechazo de dominio: la transición no aplica | No | `execution_quarantine`, visible en el `GET` | Sigue | **Congelada** |
+| Falla de contrato: falta un campo obligatorio | No | Dead-letter topic | Sigue | Sin tocar |
+| Falla transitoria: base o broker caídos | **Sí**, backoff con el container pausado | En ningún lado: se aplica cuando vuelve | **Pausado** | Sin tocar |
+| Transitoria que no cede en el tope de tiempo | — | — | **Frenado** | Sin tocar |
+
+**Qué decidí**
+
+1. Decidí que un error transitorio (por ejemplo: caída de DB) debería reintentarse y pausar el consumer hasta
+   poder ser procesada, si llega al tiempo límite establecido se frena el sistema. Asumimos que una falla de
+   este alcance ya saltan las alertas al equipo de monitoreo, ya sea el error base de datos al querer
+   conectarse o el parámetro `lag` de Kafka que puede monitorearse. En ese momento el equipo de
+   infraestructura o de desarrollo deberían resolver la incidencia para restablecerlo.
+
+   No perdemos lo que no se procesó, al pausar la instancia no rebalancea ni queda zombie, entiendo por la
+   documentación que queda haciendo polls que devuelven vacío para poder cumplir con lo anterior. Entiendo
+   que es un problema del entorno no del procesamiento (código), una vez restablecido se debería intentar
+   aplicar el ER correctamente o sino, tenemos las soluciones siguientes.
+
+   Ahora bien, si el error es de contrato y más aún que no cumple lo asumido de que el mensaje llegue con un
+   `fixId` o `numericOrderId`, este no lo podemos persistir en la base de datos de cuarentena porque no le
+   podemos dar identidad, pero sí podemos crear un Dead-letter para no perderlo ni omitirlo. Esto nos ayudará
+   a recrear el ciclo de vida de la orden junto con la base de datos de cuarentena si es que algo no es
+   consistente con las aplicadas más cuarentena: este es nuestro tercer lugar donde almacenamos los ER que no
+   pudimos aplicar. Tengo en claro que una orden puede quedar con un "hueco" por no poder asociarla, pero un
+   hueco que podemos rellenar gracias al Dead-letter.
+
+   Mientras que, si un ER no aplica y cumple con lo asumido, sí va a poder persistirse en la tabla de
+   cuarentena. Este es un error que por más que reintentemos X veces no podrá aplicarse y no vale la pena un
+   protocolo de reintentos.
+
+   Y la razón de ser de cuarentena más estado `INCOMPLETE` es la evidencia de que una DLQ no sirve para estos
+   casos donde tenemos identificada a la orden y su ER no fue aplicado.
+
+   La idea de todo esto es siempre tener el ciclo de vida de una orden completo al momento de alguna falla,
+   ya sea de dominio, de contrato o transitoria, cumpliendo la premisa de no perder ningún ER.
+
+2. Una orden que está marcada como `INCOMPLETE` y siguen llegando ER se van a acumular en cuarentena para
+   tener al alcance el ciclo de vida con tan sólo un GET, esto nos permite no frenar la partición a esa orden
+   `INCOMPLETE` y poder continuar procesando otras órdenes.
+
+3. Queda pendiente un protocolo de recuperación de las órdenes `INCOMPLETE` y los ER que quedan en la
+   Dead-letter si lo ameritan.
+
 **Evidencia que la validará:** un ER inválido de la orden A, un ER posterior de A y un ER de B producen
 resultados diferenciados y observables; B sigue avanzando.
-
-**Estado:** abierta.
 
 **Alcance:** el enunciado no exige implementar el mecanismo completo, sólo que nada se descarte en silencio.
 Lo que quede sin implementar se documenta acá.
