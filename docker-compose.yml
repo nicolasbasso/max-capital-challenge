@@ -46,5 +46,45 @@ services:
       timeout: 10s
       retries: 20
 
+  # Dos instancias del mismo servicio, mismo consumer group. Kafka reparte las particiones
+  # entre las dos; todos los ER de una orden comparten key, asi que caen siempre en la misma
+  # particion y los consume una sola instancia por vez. Ahi vive la garantia de secuencia.
+  #
+  # Las dos corren Flyway al arrancar. No hace falta coordinarlas: Flyway toma un lock en la
+  # base y la segunda espera a que la primera termine.
+  app-1:
+    build: .
+    container_name: maxcapital-app-1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      APP_INSTANCE_ID: app-1
+      DB_URL: jdbc:postgresql://postgres:5432/orderstate
+      DB_USER: orderstate
+      DB_PASSWORD: orderstate
+      KAFKA_BOOTSTRAP: kafka:9092
+    ports:
+      - "8081:8080"
+
+  app-2:
+    build: .
+    container_name: maxcapital-app-2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      APP_INSTANCE_ID: app-2
+      DB_URL: jdbc:postgresql://postgres:5432/orderstate
+      DB_USER: orderstate
+      DB_PASSWORD: orderstate
+      KAFKA_BOOTSTRAP: kafka:9092
+    ports:
+      - "8082:8080"
+
 volumes:
   maxcapital-pgdata:
