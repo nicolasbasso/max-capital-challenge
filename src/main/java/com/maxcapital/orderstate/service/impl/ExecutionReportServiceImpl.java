@@ -40,8 +40,7 @@ public class ExecutionReportServiceImpl implements ExecutionReportService {
         if (OrderStatus.applies(statusPersisted, report.status())) {
             order.applyExecution(report.status(), report.amounts());
         } else {
-            quarantine(order, provisional,
-                    new Rejection(report, rawPayload, statusPersisted, QuarantineReason.STATE_TRANSITION_REJECTED));
+            quarantine(order, provisional, report, rawPayload, statusPersisted);
         }
 
         orderRepository.save(order);
@@ -56,24 +55,20 @@ public class ExecutionReportServiceImpl implements ExecutionReportService {
         }
     }
 
-    private void quarantine(Order order, ExecutionLedgerEntry provisional, Rejection rejection) {
+    private void quarantine(Order order, ExecutionLedgerEntry provisional, ExecutionReportMessage report,
+                            String rawPayload, OrderStatus statusPersisted) {
         executionLedgerRepository.delete(provisional);
         executionLedgerRepository.flush();
 
-        ExecutionReportMessage report = rejection.report();
         try {
             quarantineRepository.saveAndFlush(QuarantinedExecutionReport.rejected(
-                    report.numericOrderId(), report.fixId(), report.status(), rejection.statusPersisted(),
-                    rejection.reason(), report.amounts(), rejection.rawPayload()));
+                    report.numericOrderId(), report.fixId(), report.status(), statusPersisted,
+                    QuarantineReason.STATE_TRANSITION_REJECTED, report.amounts(), rawPayload));
         } catch (DataIntegrityViolationException violation) {
             throw asDuplicateOrRethrow(violation, QuarantinedExecutionReport.UNIQUE_ORDER_FIX_ID, report);
         }
 
         order.freeze();
-    }
-
-    private record Rejection(ExecutionReportMessage report, String rawPayload,
-                             OrderStatus statusPersisted, QuarantineReason reason) {
     }
 
     private RuntimeException asDuplicateOrRethrow(DataIntegrityViolationException violation, String constraint, ExecutionReportMessage report) {
