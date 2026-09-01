@@ -33,8 +33,4 @@ public class ExecutionAmounts {
     public static ExecutionAmounts zero() {
         return of(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
     }
-
-    public boolean isInconsistent() {
-        return nominalAmount.compareTo(accumulativeNominalAmount.add(leavesNominalAmount)) != 0;
-    }
 }

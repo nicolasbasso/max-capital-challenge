@@ -19,8 +19,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Optional;
 
-import java.util.Optional;
-
 @Service
 @RequiredArgsConstructor
 public class ExecutionReportServiceImpl implements ExecutionReportService {
@@ -35,30 +33,18 @@ public class ExecutionReportServiceImpl implements ExecutionReportService {
         Optional<Order> existing = orderRepository.findById(report.numericOrderId());
         OrderStatus statusPersisted = existing.map(Order::getStatus).orElse(null);
 
-        Order order = existing.orElseGet(
-                () -> orderRepository.saveAndFlush(Order.opening(report.numericOrderId())));
+        Order order = existing.orElseGet(() -> orderRepository.saveAndFlush(Order.opening(report.numericOrderId())));
 
         ExecutionLedgerEntry provisional = recordInLedger(report, rawPayload);
 
-        Optional<Rejection> rejection = rejectionFor(report, rawPayload, statusPersisted);
-
-        if (rejection.isPresent()) {
-            quarantine(order, provisional, rejection.get());
-        } else {
+        if (OrderStatus.applies(statusPersisted, report.status())) {
             order.applyExecution(report.status(), report.amounts());
+        } else {
+            quarantine(order, provisional,
+                    new Rejection(report, rawPayload, statusPersisted, QuarantineReason.STATE_TRANSITION_REJECTED));
         }
 
         orderRepository.save(order);
-    }
-
-    private Optional<Rejection> rejectionFor(ExecutionReportMessage report, String rawPayload, OrderStatus statusPersisted) {
-        if (report.amounts().isInconsistent()) {
-            return Optional.of(new Rejection(report, rawPayload, statusPersisted, QuarantineReason.AMOUNTS_INCONSISTENT));
-        }
-        if (OrderStatus.applies(statusPersisted, report.status())) {
-            return Optional.empty();
-        }
-        return Optional.of(new Rejection(report, rawPayload, statusPersisted, QuarantineReason.STATE_TRANSITION_REJECTED));
     }
 
     private ExecutionLedgerEntry recordInLedger(ExecutionReportMessage report, String rawPayload) {
