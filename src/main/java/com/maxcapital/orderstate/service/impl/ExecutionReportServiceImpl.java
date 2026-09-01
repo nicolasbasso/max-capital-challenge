@@ -52,9 +52,6 @@ public class ExecutionReportServiceImpl implements ExecutionReportService {
     }
 
     private Optional<Rejection> rejectionFor(ExecutionReportMessage report, String rawPayload, OrderStatus statusPersisted) {
-        if (report.amounts().isInconsistent()) {
-            return Optional.of(new Rejection(report, rawPayload, statusPersisted, QuarantineReason.AMOUNTS_INCONSISTENT));
-        }
         if (OrderStatus.applies(statusPersisted, report.status())) {
             return Optional.empty();
         }
