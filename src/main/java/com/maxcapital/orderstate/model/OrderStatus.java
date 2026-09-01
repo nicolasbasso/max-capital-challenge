@@ -4,9 +4,16 @@ public enum OrderStatus {
     NEW,
     PARTIALLY_FILLED,
     FILLED,
-    CANCELLED;
+    CANCELLED,
+    INCOMPLETE;
 
-    public boolean isTerminal() {
-        return this == FILLED || this == CANCELLED;
+    public static boolean applies(OrderStatus persisted, OrderStatus incoming) {
+        if (incoming == INCOMPLETE) {
+            return false;
+        }
+        if (persisted == null) {
+            return incoming == NEW;
+        }
+        return incoming != NEW && (persisted == NEW || persisted == PARTIALLY_FILLED);
     }
 }

@@ -190,7 +190,7 @@
             aplicarse y PIT lo reporta como sobreviviente aunque borrarlo rompa los tests.
             Se verifico a mano que setValidator y el message converter hacen falta.
           -->
-          <mutationThreshold>75</mutationThreshold>
+          <mutationThreshold>90</mutationThreshold>
         </configuration>
       </plugin>
     </plugins>

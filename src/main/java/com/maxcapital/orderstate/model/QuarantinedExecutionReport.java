@@ -11,9 +11,9 @@ import java.time.Instant;
 
 @Entity
 @Table(
-        name = "execution_ledger",
+        name = "execution_quarantine",
         uniqueConstraints = @UniqueConstraint(
-                name = ExecutionLedgerEntry.UNIQUE_ORDER_FIX_ID,
+                name = QuarantinedExecutionReport.UNIQUE_ORDER_FIX_ID,
                 columnNames = {"numeric_order_id", "fix_id"}
         )
 )
@@ -21,9 +21,9 @@ import java.time.Instant;
 @Builder
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
-public class ExecutionLedgerEntry {
+public class QuarantinedExecutionReport {
 
-    public static final String UNIQUE_ORDER_FIX_ID = "uq_execution_ledger_order_fix";
+    public static final String UNIQUE_ORDER_FIX_ID = "uq_execution_quarantine_order_fix";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -36,8 +36,16 @@ public class ExecutionLedgerEntry {
     private String fixId;
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 32)
-    private OrderStatus status;
+    @Column(name = "incoming_status", nullable = false, length = 32)
+    private OrderStatus incomingStatus;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "order_status_at_rejection", length = 32)
+    private OrderStatus orderStatusAtRejection;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 64)
+    private QuarantineReason reason;
 
     @Embedded
     private ExecutionAmounts amounts;
@@ -50,12 +58,15 @@ public class ExecutionLedgerEntry {
     @Column(name = "recorded_at", nullable = false, insertable = false, updatable = false)
     private Instant recordedAt;
 
-    public static ExecutionLedgerEntry applied(Long numericOrderId, String fixId, OrderStatus status,
-                                               ExecutionAmounts amounts, String rawPayload) {
-        return ExecutionLedgerEntry.builder()
+    public static QuarantinedExecutionReport rejected(Long numericOrderId, String fixId, OrderStatus incomingStatus,
+                                                      OrderStatus orderStatusAtRejection, QuarantineReason reason,
+                                                      ExecutionAmounts amounts, String rawPayload) {
+        return QuarantinedExecutionReport.builder()
                 .numericOrderId(numericOrderId)
                 .fixId(fixId)
-                .status(status)
+                .incomingStatus(incomingStatus)
+                .orderStatusAtRejection(orderStatusAtRejection)
+                .reason(reason)
                 .amounts(amounts)
                 .rawPayload(rawPayload)
                 .build();

@@ -37,6 +37,8 @@ class ExecutionReportEndToEndTest extends IntegrationTestBase {
                   "ticker": "VSCPC",
                   "side": "BUY",
                   "nominalAmounts": 4956,
+                  "accumulativeNominalAmount": 0,
+                  "leavesNominalAmount": 4956,
                   "transactionTime": "2026-07-20T18:08:52.129"
                 }
                 """.formatted(fixId, numericOrderId));
@@ -67,6 +69,9 @@ class ExecutionReportEndToEndTest extends IntegrationTestBase {
         assertThat(response.getBody().appliedExecutions()).isEqualTo(1);
         assertThat(response.getBody().ledger()).hasSize(1);
         assertThat(response.getBody().ledger().getFirst().fixId()).isEqualTo(fixId);
+        assertThat(response.getBody().quarantine())
+                .as("la lista de cuarentena viaja siempre, vacia cuando no hay nada rechazado")
+                .isEmpty();
     }
 
     @Test
@@ -74,7 +79,8 @@ class ExecutionReportEndToEndTest extends IntegrationTestBase {
         long numericOrderId = 90501L;
 
         kafka.send(topic, String.valueOf(numericOrderId), """
-                {"fixId": "   ", "numericOrderId": %d, "status": "NEW"}
+                {"fixId": "   ", "numericOrderId": %d, "status": "NEW",
+                 "nominalAmounts": 4956, "accumulativeNominalAmount": 0, "leavesNominalAmount": 4956}
                 """.formatted(numericOrderId));
 
         esperarUnPoco();
