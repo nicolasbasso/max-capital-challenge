@@ -41,17 +41,15 @@ ALTER TABLE execution_ledger
 -- ER rechazado en proteccion por identidad. Sin ella, la reentrega dependeria unicamente de que
 -- INCOMPLETE sea absorbente.
 --
--- reason tiene dos valores desde el slice 2:
+-- reason tiene un solo valor desde el slice 2:
 --   STATE_TRANSITION_REJECTED  el ER no encaja en la maquina de estados de D-005
---   AMOUNTS_INCONSISTENT       el ER es internamente incoherente: acumulado + resto != total
--- La segunda se valida mirando UN SOLO ER, sin historia y sin depender del orden. La monotonia del
--- acumulado NO se valida aca a proposito: depende de que el ER anterior sea realmente el anterior,
--- o sea hereda el supuesto de D-001, que es justamente el que podria estar roto.
+-- No se valida coherencia interna de montos: el enunciado no la exige, y bajo la regla de D-005
+-- cualquier validacion extra es una forma mas de congelar ordenes. Un CANCELLED que reporta
+-- remanente cero despues de un fill parcial es legitimo y quedaba congelado.
 -- D-006 decide si escribe motivos propios en esta tabla.
 --
--- Los montos se repiten como columnas aca por el mismo criterio que en el ledger: una fila que dice
--- AMOUNTS_INCONSISTENT y no muestra los montos no contesta la pregunta que la tabla existe para
--- contestar.
+-- Los montos se repiten como columnas aca por el mismo criterio que en el ledger: una fila de
+-- cuarentena que no muestra los montos no contesta la pregunta que la tabla existe para contestar.
 CREATE TABLE execution_quarantine (
     id                        BIGSERIAL    PRIMARY KEY,
     numeric_order_id          BIGINT       NOT NULL REFERENCES orders (numeric_order_id),
@@ -70,12 +68,8 @@ CREATE TABLE execution_quarantine (
     CONSTRAINT uq_execution_quarantine_order_fix UNIQUE (numeric_order_id, fix_id)
 );
 
--- reason tiene dos valores desde el slice 2:
+-- reason tiene un solo valor desde el slice 2:
 --   STATE_TRANSITION_REJECTED  el ER no encaja en la maquina de estados de D-005
---   AMOUNTS_INCONSISTENT       el ER es internamente incoherente: acumulado + resto != total
--- La segunda se valida mirando UN SOLO ER, sin historia y sin depender del orden. La monotonia del
--- acumulado NO se valida acá a proposito: depende de que el ER anterior sea realmente el anterior,
--- o sea hereda el supuesto de D-001, que es justamente el que podria estar roto.
 
 -- order_status_at_rejection es nullable a proposito: cuando el ER llega y la orden no existe
 -- todavia, no hay estado previo que registrar. Es la fila "(no existe)" de la tabla de D-005.

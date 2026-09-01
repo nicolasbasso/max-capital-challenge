@@ -218,49 +218,22 @@ class OrderLifecycleTest extends IntegrationTestBase {
     }
 
     @Test
-    void unErInternamenteIncoherenteVaACuarentenaYCongelaLaOrden() {
-        long id = 20012L;
+    void unaOrdenSeCancelaDespuesDeUnParcialAunqueElRemanenteQuedeEnCero() {
+        long id = 20015L;
         aplicar(er("F-1", id, OrderStatus.NEW, 0, 4956));
+        aplicar(er("F-2", id, OrderStatus.PARTIALLY_FILLED, 3756, 1200));
 
-        aplicar(er("F-2", id, OrderStatus.PARTIALLY_FILLED, 1000, 1000));
+        aplicar(er("F-3", id, OrderStatus.CANCELLED, 3756, 0));
 
         Order order = orden(id);
-        assertThat(order.getStatus()).isEqualTo(OrderStatus.INCOMPLETE);
-        assertThat(order.getAppliedExecutions()).isEqualTo(1);
-        assertThat(ledger.findByNumericOrderIdOrderByIdAsc(id)).hasSize(1);
-
-        List<QuarantinedExecutionReport> cuarentenados = quarantine.findByNumericOrderIdOrderByIdAsc(id);
-        assertThat(cuarentenados).hasSize(1);
-        assertThat(cuarentenados.getFirst().getReason())
-                .as("1000 + 1000 no da 4956: el ER no se cree ni a si mismo")
-                .isEqualTo(QuarantineReason.AMOUNTS_INCONSISTENT);
-    }
-
-    @Test
-    void laIncoherenciaDeMontosSeEvaluaAntesQueLaTransicion() {
-        long id = 20013L;
-        aplicar(er("F-1", id, OrderStatus.NEW, 0, 4956));
-        aplicar(er("F-2", id, OrderStatus.FILLED, 4956, 0));
-
-        aplicar(er("F-3", id, OrderStatus.PARTIALLY_FILLED, 1000, 1000));
-
-        assertThat(quarantine.findByNumericOrderIdOrderByIdAsc(id).getFirst().getReason())
-                .as("el ER es incoherente Y ademas posterior a un terminal: gana el motivo mas basico")
-                .isEqualTo(QuarantineReason.AMOUNTS_INCONSISTENT);
-    }
-
-    @Test
-    void laReentregaDeUnErIncoherenteSigueSiendoUnDuplicado() {
-        long id = 20014L;
-        aplicar(er("F-1", id, OrderStatus.NEW, 0, 4956));
-        var incoherente = er("F-2", id, OrderStatus.PARTIALLY_FILLED, 1000, 1000);
-        aplicar(incoherente);
-
-        assertThatThrownBy(() -> aplicar(incoherente))
-                .as("la dedup corre antes que la validacion de montos, igual que antes que la de transicion")
-                .isInstanceOf(DuplicateExecutionReportException.class);
-
-        assertThat(quarantine.findByNumericOrderIdOrderByIdAsc(id)).hasSize(1);
+        assertThat(order.getStatus())
+                .as("cancelar despues de un parcial es una transicion legal de D-005")
+                .isEqualTo(OrderStatus.CANCELLED);
+        assertThat(order.getAppliedExecutions()).isEqualTo(3);
+        assertThat(ledger.findByNumericOrderIdOrderByIdAsc(id)).hasSize(3);
+        assertThat(quarantine.findByNumericOrderIdOrderByIdAsc(id))
+                .as("un remanente en cero al cancelar no es motivo para congelar la orden")
+                .isEmpty();
     }
 
     @Test
