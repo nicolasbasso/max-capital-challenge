@@ -12,6 +12,9 @@ import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.ListenerExecutionFailedException;
 import org.springframework.kafka.support.converter.ConversionException;
+import org.springframework.orm.jpa.JpaSystemException;
+
+import java.sql.SQLException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -108,6 +111,34 @@ class ExecutionReportFailureRecovererTest {
 
         verify(registry)
                 .stop();
+    }
+
+    @Test
+    void unCorteDeConexionEnMedioDeLaTransaccionEsTransitorioAunqueElRollbackLoTape() {
+        Exception corteDeRed = new ListenerExecutionFailedException("listener failed",
+                new JpaSystemException(new org.hibernate.TransactionException("could not roll back",
+                        new SQLException("connection reset by peer", "08006"))));
+
+        assertThat(ExecutionReportFailureRecoverer.classify(corteDeRed))
+                .as("ninguna clase de la cadena está en la lista: lo que dice que es de conexión "
+                        + "es el SQLState 08 del driver")
+                .isEqualTo(FailureKind.TRANSIENT);
+
+        recoverer.accept(unRegistro(), corteDeRed);
+
+        verify(registry).stop();
+        verify(deadLetter, never()).accept(any(), any());
+    }
+
+    @Test
+    void laClasificacionMiraTambienLasCausasSuprimidas() {
+        Exception rollbackFallido = new IllegalStateException("el rollback reemplazó la causa original");
+        rollbackFallido.addSuppressed(new SQLException("connection reset by peer", "08006"));
+
+        assertThat(ExecutionReportFailureRecoverer.classify(
+                new ListenerExecutionFailedException("listener failed", rollbackFallido)))
+                .as("cuando el rollback tapa la excepción primaria, la original queda como suprimida")
+                .isEqualTo(FailureKind.TRANSIENT);
     }
 
     private static ConsumerRecord<String, String> unRegistro() {

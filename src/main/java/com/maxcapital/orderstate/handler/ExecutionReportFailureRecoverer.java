@@ -15,10 +15,17 @@ import org.springframework.kafka.support.converter.ConversionException;
 import org.springframework.messaging.converter.MessageConversionException;
 import org.springframework.messaging.handler.annotation.support.MethodArgumentNotValidException;
 import org.springframework.stereotype.Component;
+import org.hibernate.exception.JDBCConnectionException;
 import org.springframework.transaction.CannotCreateTransactionException;
 
+import java.sql.SQLException;
 import java.sql.SQLTransientException;
+import java.util.ArrayDeque;
+import java.util.Collections;
+import java.util.Deque;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Set;
 
 @Slf4j
 @Component
@@ -49,19 +56,45 @@ public class ExecutionReportFailureRecoverer implements ConsumerRecordRecoverer 
         return TRANSIENT_FAILURES;
     }
 
+    private static final String CONNECTION_EXCEPTION_SQL_STATE_CLASS = "08";
+
     public static FailureKind classify(Throwable failure) {
-        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
-            if (matches(cause, CONTRACT_FAILURES)) {
-                return FailureKind.CONTRACT;
-            }
-            if (matches(cause, TRANSIENT_FAILURES)) {
-                return FailureKind.TRANSIENT;
-            }
-            if (cause.getCause() == cause) {
-                break;
-            }
+        Set<Throwable> everyCause = everyCauseOf(failure);
+
+        if (everyCause.stream().anyMatch(cause -> matches(cause, CONTRACT_FAILURES))) {
+            return FailureKind.CONTRACT;
+        }
+        if (everyCause.stream().anyMatch(cause -> matches(cause, TRANSIENT_FAILURES) || lostTheConnection(cause))) {
+            return FailureKind.TRANSIENT;
         }
         return FailureKind.UNKNOWN;
+    }
+
+    private static Set<Throwable> everyCauseOf(Throwable failure) {
+        Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        Deque<Throwable> pending = new ArrayDeque<>();
+        pending.add(failure);
+
+        while (!pending.isEmpty()) {
+            Throwable current = pending.poll();
+            if (!seen.add(current)) {
+                continue;
+            }
+            if (current.getCause() != null) {
+                pending.add(current.getCause());
+            }
+            Collections.addAll(pending, current.getSuppressed());
+        }
+        return seen;
+    }
+
+    private static boolean lostTheConnection(Throwable cause) {
+        if (cause instanceof JDBCConnectionException) {
+            return true;
+        }
+        return cause instanceof SQLException sql
+                && sql.getSQLState() != null
+                && sql.getSQLState().startsWith(CONNECTION_EXCEPTION_SQL_STATE_CLASS);
     }
 
     private static boolean matches(Throwable cause, List<? extends Class<? extends Throwable>> types) {

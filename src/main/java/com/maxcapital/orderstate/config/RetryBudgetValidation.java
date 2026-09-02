@@ -11,6 +11,7 @@ import org.springframework.util.backoff.BackOffExecution;
 import org.springframework.util.backoff.ExponentialBackOff;
 
 import javax.sql.DataSource;
+import java.sql.SQLException;
 
 @Slf4j
 @Component
@@ -22,13 +23,19 @@ public class RetryBudgetValidation {
     private final ConsumerFactory<?, ?> consumerFactory;
     private final DataSource dataSource;
     private final ExponentialBackOff transientBackOff;
-    private final KafkaConfigurations kafkaConfigurations;
 
     @PostConstruct
     public void retryBudgetMustFitInOnePollInterval() {
-        long attempts = kafkaConfigurations.getRetryMaxAttempts() + 1L;
-        long attemptCost = connectionTimeout();
-        long backOff = totalBackOff();
+        Long attemptCost = connectionTimeout();
+        if (attemptCost == null) {
+            log.warn("the retry budget assumes HikariCP to know how long one attempt can take; "
+                    + "found {}, skipping the check", dataSource.getClass().getName());
+            return;
+        }
+
+        BackOff plannedRetries = plannedRetries();
+        long attempts = plannedRetries.retries + 1L;
+        long backOff = plannedRetries.total;
         long worstCase = attempts * attemptCost + backOff;
         long maxPollInterval = maxPollInterval();
 
@@ -44,12 +51,15 @@ public class RetryBudgetValidation {
         log.info("retry budget: worst case {}ms against max.poll.interval.ms={}ms", worstCase, maxPollInterval);
     }
 
-    private long connectionTimeout() {
-        if (dataSource instanceof HikariDataSource hikari) {
-            return hikari.getConnectionTimeout();
+    private Long connectionTimeout() {
+        try {
+            if (dataSource.isWrapperFor(HikariDataSource.class)) {
+                return dataSource.unwrap(HikariDataSource.class).getConnectionTimeout();
+            }
+        } catch (SQLException unwrapFailed) {
+            log.warn("could not unwrap the data source to read its connection timeout", unwrapFailed);
         }
-        throw new IllegalStateException("the retry budget is validated against the connection timeout of the pool, "
-                + "and assumes HikariCP; found " + dataSource.getClass().getName());
+        return dataSource instanceof HikariDataSource hikari ? hikari.getConnectionTimeout() : null;
     }
 
     private long maxPollInterval() {
@@ -58,14 +68,19 @@ public class RetryBudgetValidation {
         return configured == null ? DEFAULT_MAX_POLL_INTERVAL_MS : Long.parseLong(configured.toString());
     }
 
-    private long totalBackOff() {
+    private BackOff plannedRetries() {
         long total = 0;
+        int retries = 0;
         BackOffExecution execution = transientBackOff.start();
         for (long interval = execution.nextBackOff();
              interval != BackOffExecution.STOP;
              interval = execution.nextBackOff()) {
             total += interval;
+            retries++;
         }
-        return total;
+        return new BackOff(retries, total);
+    }
+
+    private record BackOff(int retries, long total) {
     }
 }
