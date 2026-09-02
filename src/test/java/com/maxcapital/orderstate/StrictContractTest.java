@@ -2,6 +2,7 @@ package com.maxcapital.orderstate;
 
 import com.maxcapital.orderstate.model.Order;
 import com.maxcapital.orderstate.model.OrderStatus;
+import com.maxcapital.orderstate.config.KafkaConfigurations;
 import com.maxcapital.orderstate.repository.ExecutionLedgerRepository;
 import com.maxcapital.orderstate.repository.OrderRepository;
 import org.junit.jupiter.api.Test;
@@ -16,6 +17,7 @@ class StrictContractTest extends IntegrationTestBase {
     @Autowired KafkaTemplate<String, String> kafka;
     @Autowired OrderRepository orders;
     @Autowired ExecutionLedgerRepository ledger;
+    @Autowired KafkaConfigurations kafkaConfigurations;
     @Value("${app.kafka.execution-reports-topic}") String topic;
 
     @Test
@@ -42,6 +44,9 @@ class StrictContractTest extends IntegrationTestBase {
                 .as("un id decimal no puede truncarse y aplicarse sobre la orden %d, que es sana"
                         .formatted(numericOrderId))
                 .isEqualTo(2);
+        assertThat(enLaDeadLetter("FIX-993001-DECIMAL"))
+                .as("rechazarlo no es descartarlo: el ER queda preservado")
+                .isNotNull();
     }
 
     @Test
@@ -62,6 +67,7 @@ class StrictContractTest extends IntegrationTestBase {
                 .as("status 0 no es NEW: un número no es un estado del contrato")
                 .isEqualTo(1);
         assertThat(orden.getStatus()).isEqualTo(OrderStatus.NEW);
+        assertThat(enLaDeadLetter("\"status\":0")).isNotNull();
     }
 
     @Test
@@ -80,6 +86,12 @@ class StrictContractTest extends IntegrationTestBase {
         assertThat(orders.findById(numericOrderId).orElseThrow().getAppliedExecutions())
                 .as("el id llega como número o no llega: el string no entra por coerción")
                 .isEqualTo(1);
+        assertThat(enLaDeadLetter("\"numericOrderId\":\"993003\"")).isNotNull();
+    }
+
+    private org.apache.kafka.clients.consumer.ConsumerRecord<String, String> enLaDeadLetter(String contiene) {
+        return DeadLetters.esperar(KAFKA.getBootstrapServers(), kafkaConfigurations.getDeadLetterTopic(),
+                contiene, java.time.Duration.ofSeconds(30));
     }
 
     private boolean esperarElFixId(long numericOrderId, String fixId) {
