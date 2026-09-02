@@ -36,6 +36,7 @@ public class ExecutionReportFailureRecoverer implements ConsumerRecordRecoverer 
         CONTRACT, TRANSIENT, UNKNOWN
     }
 
+
     private static final List<Class<? extends Throwable>> CONTRACT_FAILURES = List.of(
             MethodArgumentNotValidException.class,
             MessageConversionException.class,

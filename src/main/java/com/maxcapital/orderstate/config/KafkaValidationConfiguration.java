@@ -82,11 +82,11 @@ public class KafkaValidationConfiguration implements KafkaListenerConfigurer {
     }
 
     @Bean
-    ExponentialBackOff transientBackOff() {//TODO: son properties desde applicationProperties, propongo hacer distintos objetos
+    ExponentialBackOff transientBackOff() {
         ExponentialBackOff backOff = new ExponentialBackOff();
-        backOff.setInitialInterval(500);
-        backOff.setMultiplier(2);
-        backOff.setMaxInterval(10_000);
+        backOff.setInitialInterval(kafkaConfigurations.getRetryInitialInterval().toMillis());
+        backOff.setMultiplier(kafkaConfigurations.getRetryMultiplier());
+        backOff.setMaxInterval(kafkaConfigurations.getRetryMaxInterval().toMillis());
         backOff.setMaxAttempts(kafkaConfigurations.getRetryMaxAttempts());
         return backOff;
     }

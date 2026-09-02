@@ -33,7 +33,7 @@ public class RetryBudgetValidation {
             return;
         }
 
-        BackOff plannedRetries = plannedRetries();
+        PlannedRetries plannedRetries = plannedRetries();
         long attempts = plannedRetries.retries + 1L;
         long backOff = plannedRetries.total;
         long worstCase = attempts * attemptCost + backOff;
@@ -63,12 +63,11 @@ public class RetryBudgetValidation {
     }
 
     private long maxPollInterval() {
-        Object configured = consumerFactory.getConfigurationProperties()
-                .get(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG);
+        Object configured = consumerFactory.getConfigurationProperties().get(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG);
         return configured == null ? DEFAULT_MAX_POLL_INTERVAL_MS : Long.parseLong(configured.toString());
     }
 
-    private BackOff plannedRetries() {
+    private PlannedRetries plannedRetries() {
         long total = 0;
         int retries = 0;
         BackOffExecution execution = transientBackOff.start();
@@ -78,9 +77,9 @@ public class RetryBudgetValidation {
             total += interval;
             retries++;
         }
-        return new BackOff(retries, total);
+        return new PlannedRetries(retries, total);
     }
 
-    private record BackOff(int retries, long total) {
+    private record PlannedRetries(int retries, long total) {
     }
 }
