@@ -23,12 +23,12 @@ Una decisión atraviesa cuatro estados. La distinción importa: elegir no es lo 
 
 | ID | Decisión | Estado | Evidencia |
 |---|---|---|---|
-| D-001 | Broker, particionado y secuencia por orden | **Elegida** | Pendiente: assert de offsets en T4.x / T5.3 |
-| D-002 | Identidad individual del ER y clave de deduplicación | **Elegida** | Pendiente: reentrega y republicación en T3.2 |
-| D-003 | Frontera transaccional, ACK/offset y recuperación | **Elegida** | Pendiente: fallas inyectadas por ventana en T5.2-T5.4 |
-| D-004 | Modelo persistente de orden, ledger y concurrencia | **Elegida** | Parcial: falta la de dos instancias reales (T4.4) |
-| D-005 | Máquina de estados y terminalidad | **Elegida** | Pendiente: se construye en el slice 2 |
-| D-006 | Errores transitorios, permanentes y orden incompleta | **Elegida** | Parcial: la cuarentena ya existe; falta la dead-letter y el backoff |
+| D-001 | Broker, particionado y secuencia por orden | **Elegida** | Parcial: dos instancias reparten las particiones 2/2 en docker; falta el assert de offsets |
+| D-002 | Identidad individual del ER y clave de deduplicación | **Elegida** | Duplicado exacto en docker: no agrega entrada al ledger |
+| D-003 | Frontera transaccional, ACK/offset y recuperación | **Elegida** | Parcial: SIGKILL con 36 ER en vuelo, 12/12 correctas; falta la matriz de 4 ventanas |
+| D-004 | Modelo persistente de orden, ledger y concurrencia | **Elegida** | Verificada con dos instancias reales: contador = ledger, sin duplicados |
+| D-005 | Máquina de estados y terminalidad | **Elegida** | Construida: 30 casos de transición, más el ciclo de vida en docker |
+| D-006 | Errores transitorios, permanentes y orden incompleta | **Elegida** | Cuarentena, dead-letter y backoff, con pruebas en docker |
 | D-007 | Settlement, outbox y deduplicación downstream | Abierta | — |
 | D-008 | Alcance declarado y trabajo fuera de alcance | Abierta | — |
 
@@ -205,9 +205,14 @@ concurrentes de dos instancias? ¿Qué motor y por qué?
   configuración sencilla y conocida.
 - Gracias a las transacciones pude integrar el ledger a la operación, y con eso si falla algo se
   hace rollback y no queda desfasada. La unión de esta transacción es el candado del contador.
+  La transacción hace que el ledger y el contador se muevan juntos. Que dos ER de la misma orden
+  no se apliquen a la vez nos lo da un consumidor por partición.
 
-**Evidencia que la validará:** intentos concurrentes sobre la misma orden no duplican entradas ni
-contador; el ledger se devuelve en orden de inserción.
+**Evidencia que la validará:** el ledger no repite entradas para un mismo ER, el contador coincide con
+la cantidad de filas de esa orden, y el ledger se devuelve en orden de inserción. Si dos ER de la misma
+orden se aplicaran en paralelo el contador se desalinearía: lo probamos llamando al servicio
+directamente y da contador 2 contra 3 filas de ledger. No pasa por el camino real porque D-001 lo
+impide, y esa prueba es justamente la que muestra que D-001 no es una comodidad sino un requisito.
 
 ---
 
@@ -265,7 +270,7 @@ estado terminal no se aplica; reentrega del mismo ER terminal es un no-op y no u
 
 ## D-006 - Errores transitorios, permanentes y orden incompleta
 
-**Estado:** elegida. La cuarentena y el error handler ya existen; la dead-letter y el backoff con pausa, no.
+**Estado:** elegida.
 
 **Pregunta que debe responder:** ¿cómo se distinguen errores transitorios de permanentes, y cómo se evita a
 la vez el descarte silencioso y el bloqueo indefinido del flujo? ¿Qué le pasa a una orden a la que le falta
@@ -275,49 +280,62 @@ un ER, y por qué una DLQ por sí sola no la repara?
 |---|---|---|---|---|
 | Rechazo de dominio: la transición no aplica | No | `execution_quarantine`, visible en el `GET` | Sigue | **Congelada** |
 | Falla de contrato: falta un campo obligatorio | No | Dead-letter topic | Sigue | Sin tocar |
-| Falla transitoria: base o broker caídos | **Sí**, backoff con el container pausado | En ningún lado: se aplica cuando vuelve | **Pausado** | Sin tocar |
-| Transitoria que no cede en el tope de tiempo | — | — | **Frenado** | Sin tocar |
+| Falla transitoria: base caída | **Sí**, backoff exponencial con el container pausado | En ningún lado: se aplica cuando vuelve | Pausado entre intentos, bloqueado dentro de cada uno | Sin tocar |
+| Transitoria que no cede en N intentos | — | — | **Frenada la ingesta de esa instancia** | Sin tocar |
 
 **Qué decidí**
 
-1. Decidí que un error transitorio (por ejemplo: caída de DB) debería reintentarse y pausar el consumer hasta
-   poder ser procesada, si llega al tiempo límite establecido se frena el sistema. Asumimos que una falla de
-   este alcance ya saltan las alertas al equipo de monitoreo, ya sea el error base de datos al querer
-   conectarse o el parámetro `lag` de Kafka que puede monitorearse. En ese momento el equipo de
-   infraestructura o de desarrollo deberían resolver la incidencia para restablecerlo.
+1. Decidí que un error transitorio (por ejemplo: caída de DB) debería reintentarse y pausar el consumer hasta poder ser procesada, si llega al tiempo límite establecido* se frena la ingesta de ER. Asumimos que una falla de este alcance ya saltan las alertas al equipo de monitoreo, ya sea el error base de datos al querer conectarse o el parámetro `lag` de Kafka que puede monitorearse. En ese momento el equipo de infraestructura o de desarollo deberían resolver la incidencia para restablecerlo.
+**Al resolver la incidencia se deberá reiniciar la instancia porque se frena la ingesta, para el challenge no se implementó pero podríamos contar con un health indicador para que kubernetes o docker reinicien**
+No perdemos lo que no se procesó, al pausar la instancia no rebalancea ni queda zombie, entiendo por la documentación que queda haciendo polls que devuelven vacío para poder cumplir con lo anterior. Entiendo que es un problema del entorno no del procesamiento (código), una vez restablecido se debería intentar aplicar el ER correctamente o sino, tenemos las soluciones siguientes.
+* Se cambió el uso del tiempo por la cantidad de reintentos: `maxElapsedTime` to `setMaxAttempts`
 
-   No perdemos lo que no se procesó, al pausar la instancia no rebalancea ni queda zombie, entiendo por la
-   documentación que queda haciendo polls que devuelven vacío para poder cumplir con lo anterior. Entiendo
-   que es un problema del entorno no del procesamiento (código), una vez restablecido se debería intentar
-   aplicar el ER correctamente o sino, tenemos las soluciones siguientes.
+**luego de las pruebas, si bien la instancia se ponía en pausa pudimos ver que aún así se rebalanceaba porque cada reintento costaba 30s (default de Hikari), la pausa sirve entre reintentos pero no en el intento**
+Log de referencia con max.poll.interval.ms=10s:
+- HikariPool-1 - Connection is not available, request timed out after 30009ms
+- consumer poll timeout has expired ... sending LeaveGroup
+- Paused consumer resumed by Kafka due to rebalance; consumer paused again
 
-   Ahora bien, si el error es de contrato y más aún que no cumple lo asumido de que el mensaje llegue con un
-   `fixId` o `numericOrderId`, este no lo podemos persistir en la base de datos de cuarentena porque no le
-   podemos dar identidad, pero sí podemos crear un Dead-letter para no perderlo ni omitirlo. Esto nos ayudará
-   a recrear el ciclo de vida de la orden junto con la base de datos de cuarentena si es que algo no es
-   consistente con las aplicadas más cuarentena: este es nuestro tercer lugar donde almacenamos los ER que no
-   pudimos aplicar. Tengo en claro que una orden puede quedar con un "hueco" por no poder asociarla, pero un
-   hueco que podemos rellenar gracias al Dead-letter.
+**Otro hallazgo en las pruebas es que ExponentialBackOff no acumula tiempo de reloj, acumula la suma de espera mientras el sistema esta "dormido" no el que tarda en trabajar, no mira el reloj nunca**
 
-   Mientras que, si un ER no aplica y cumple con lo asumido, sí va a poder persistirse en la tabla de
-   cuarentena. Este es un error que por más que reintentemos X veces no podrá aplicarse y no vale la pena un
-   protocolo de reintentos.
+Hallazgo de forma cronologica:
+1. Decidí pausar el consumer y poner un tope de tiempo
+2. En la primer prueba la pausa cubre el hueco entre intentos, y no el tiempo dentro de uno como parecía. Con la base caída y max.poll.interval.ms en default cada intento cuesta 30s parados en Hikari
+3. Noté que el tope no medía tiempo de reloj, sino la suma total del tiempo "dormido" y no de trabajo. Tope de 5s → 158s reales.
+4. Prueba final: 4 intentos, 123 segundos, contra los 300 de max.poll.interval.ms. Y con los defaults no hay expulsión:
+**poll timeout expired = 0 en las dos instancias, frenó por decisión propia.**
 
-   Y la razón de ser de cuarentena más estado `INCOMPLETE` es la evidencia de que una DLQ no sirve para estos
-   casos donde tenemos identificada a la orden y su ER no fue aplicado.
+**Por eso lo cambié a cantidad de intentos.**
 
-   La idea de todo esto es siempre tener el ciclo de vida de una orden completo al momento de alguna falla,
-   ya sea de dominio, de contrato o transitoria, cumpliendo la premisa de no perder ningún ER.
+Forzando el poll a 10s pude reproducir una expulsión. Y aun expulsado y rebalanceando, no se perdió ni se duplicó nada.
+**A pesar de esto, no hubo problemas, el ER fue aplicado, no hubo duplicación y el `applied_executions` correspondía con las ER y el ledger**
 
-2. Una orden que está marcada como `INCOMPLETE` y siguen llegando ER se van a acumular en cuarentena para
-   tener al alcance el ciclo de vida con tan sólo un GET, esto nos permite no frenar la partición a esa orden
-   `INCOMPLETE` y poder continuar procesando otras órdenes.
+**Para el challenge nos alcanza, pero podríamos implementar fail fast para la conexión de Hikari o un circuit breaker que corte sin esperarlo.**
 
-3. Queda pendiente un protocolo de recuperación de las órdenes `INCOMPLETE` y los ER que quedan en la
-   Dead-letter si lo ameritan.
+Ahora bien, si el error es de contrato y más aún que no cumple lo asumido de que el mensaje llegue con un `fixId` o `numericOrderId` este no lo podemos persistir en la base de datos de cuarentena porque no le podemos dar identidad, pero sí podemos crear un Dead-letter para no perderlo ni omitirlo, esto nos ayudará a recrear el ciclo de vida de la orden junto con la base de datos de cuarentena si es que algo no es consistente con las aplicadas + cuarentena este es nuestro tercer lugar donde almacenamos los ER corruptos. Tengo en claro que una orden puede quedar con un "hueco" por no poder asociarla, pero un hueco que podemos rellenar gracias al Dead-letter.
 
-**Evidencia que la validará:** un ER inválido de la orden A, un ER posterior de A y un ER de B producen
-resultados diferenciados y observables; B sigue avanzando.
+`numericOrderId` viaja como entero literal. Un decimal, un string o un número en notación científica no
+cumplen el contrato aunque representen el mismo entero, así que van a la Dead-letter como cualquier otra
+violación. Lo declaro porque antes se aceptaban por coerción: `992023.9` se truncaba y se aplicaba sobre
+la orden 992023, que es una orden sana de otro. Preferimos rechazar de más antes que tocar una orden que
+no corresponde.
+
+Mientras que, si un ER no aplica y cumple con lo asumido si va a poder persistirse en la tabla de cuarentena. Este es un error que por mas que reintentemos X veces no podrá aplicarse y no vale la pena un protocolo de reintentos.
+Y la razón de ser de cuarentena + estado `INCOMPLETE` es la evidencia que una DLQ no sirve para estos casos donde tenemos identificada a la orden y su ER no es aplicado.
+La idea de todo esto es siempre tener el ciclo de vida de una orden completo al momento de alguna falla, ya sea de dominio, de contrato o transitoria, cumpliendo la premisa de no perder ningún ER.
+
+2. Una orden que está marcada como `INCOMPLETE` y siguen llegando ER se van a acumular en cuarentena para tener al alcance el ciclo de vida con tan sólo un GET, esto nos permite no frenar la partición a esa orden `INCOMPLETE` y poder continuar procesando otras ordenes.
+
+3. Queda pendiente un protocolo de recuperación de las ordenes `INCOMPLETE` y los ER que quedan en la Dead-letter si lo ameritan.
+
+**Evidencia que la validará:** un ER que rompe el contrato termina en el dead-letter topic, no se persiste, y
+el ER publicado detrás de él se procesa igual: ninguna instancia frena. Un SIGKILL a una instancia con 36 ER
+en vuelo deja las 12 órdenes en `FILLED` con exactamente 3 ejecuciones cada una. Una caída de base más
+corta que el presupuesto de reintentos se recupera sola; una más larga frena la ingesta y hay que
+reiniciar la instancia. En los dos casos no se pierde nada: el offset no se commiteó, así que al volver
+el ER pendiente se aplica. En todos los escenarios `applied_executions` coincide con las filas del ledger
+de esa orden y no hay `fixId` repetido dentro de una misma orden.
+
 
 **Alcance:** el enunciado no exige implementar el mecanismo completo, sólo que nada se descarte en silencio.
 Lo que quede sin implementar se documenta acá.
