@@ -20,11 +20,25 @@ public class KafkaConfigurations {
     @NotBlank
     private String executionReportsTopic;
 
+    @NotBlank
+    private String deadLetterTopic;
+
+    @Positive
+    private int retryMaxAttempts;
+
     @Positive
     private int partitions;
 
     @Positive
     private int replicas;
+
+    @Bean
+    NewTopic deadLetterNewTopic() { //TODO: por ej deberian ser app.kafka.dead-letter-new-topic.deadLetterTopic si mal no recuerdo
+        return TopicBuilder.name(deadLetterTopic)
+                .partitions(partitions)
+                .replicas(replicas)
+                .build();
+    }
 
     @Bean
     NewTopic executionReportsNewTopic() {
