@@ -313,6 +313,13 @@ Forzando el poll a 10s pude reproducir una expulsión. Y aun expulsado y rebalan
 **Para el challenge nos alcanza, pero podríamos implementar fail fast para la conexión de Hikari o un circuit breaker que corte sin esperarlo.**
 
 Ahora bien, si el error es de contrato y más aún que no cumple lo asumido de que el mensaje llegue con un `fixId` o `numericOrderId` este no lo podemos persistir en la base de datos de cuarentena porque no le podemos dar identidad, pero sí podemos crear un Dead-letter para no perderlo ni omitirlo, esto nos ayudará a recrear el ciclo de vida de la orden junto con la base de datos de cuarentena si es que algo no es consistente con las aplicadas + cuarentena este es nuestro tercer lugar donde almacenamos los ER corruptos. Tengo en claro que una orden puede quedar con un "hueco" por no poder asociarla, pero un hueco que podemos rellenar gracias al Dead-letter.
+
+`numericOrderId` viaja como entero literal. Un decimal, un string o un número en notación científica no
+cumplen el contrato aunque representen el mismo entero, así que van a la Dead-letter como cualquier otra
+violación. Lo declaro porque antes se aceptaban por coerción: `992023.9` se truncaba y se aplicaba sobre
+la orden 992023, que es una orden sana de otro. Preferimos rechazar de más antes que tocar una orden que
+no corresponde.
+
 Mientras que, si un ER no aplica y cumple con lo asumido si va a poder persistirse en la tabla de cuarentena. Este es un error que por mas que reintentemos X veces no podrá aplicarse y no vale la pena un protocolo de reintentos.
 Y la razón de ser de cuarentena + estado `INCOMPLETE` es la evidencia que una DLQ no sirve para estos casos donde tenemos identificada a la orden y su ER no es aplicado.
 La idea de todo esto es siempre tener el ciclo de vida de una orden completo al momento de alguna falla, ya sea de dominio, de contrato o transitoria, cumpliendo la premisa de no perder ningún ER.
