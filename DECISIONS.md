@@ -323,9 +323,11 @@ La idea de todo esto es siempre tener el ciclo de vida de una orden completo al 
 
 **Evidencia que la validará:** un ER que rompe el contrato termina en el dead-letter topic, no se persiste, y
 el ER publicado detrás de él se procesa igual: ninguna instancia frena. Un SIGKILL a una instancia con 36 ER
-en vuelo deja las 12 órdenes en `FILLED` con exactamente 3 ejecuciones cada una. Una caída de base de 150
-segundos se recupera sin pérdida al volver. En todos los escenarios `applied_executions` coincide con las
-filas del ledger de esa orden y no hay `fixId` repetido dentro de una misma orden.
+en vuelo deja las 12 órdenes en `FILLED` con exactamente 3 ejecuciones cada una. Una caída de base más
+corta que el presupuesto de reintentos se recupera sola; una más larga frena la ingesta y hay que
+reiniciar la instancia. En los dos casos no se pierde nada: el offset no se commiteó, así que al volver
+el ER pendiente se aplica. En todos los escenarios `applied_executions` coincide con las filas del ledger
+de esa orden y no hay `fixId` repetido dentro de una misma orden.
 
 
 **Alcance:** el enunciado no exige implementar el mecanismo completo, sólo que nada se descarte en silencio.
