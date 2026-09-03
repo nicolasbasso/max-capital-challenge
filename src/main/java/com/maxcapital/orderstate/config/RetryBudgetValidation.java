@@ -43,7 +43,7 @@ public class RetryBudgetValidation {
             throw new IllegalStateException(("retrying a transient failure can block the consumer for %dms "
                     + "(%d attempts of up to %dms waiting for a connection, plus %dms of backoff), "
                     + "which reaches max.poll.interval.ms=%dms: the group would evict this consumer "
-                    + "mid-processing. Lower app.kafka.retry-max-attempts or "
+                    + "mid-processing. Lower app.kafka.retry.max-attempts or "
                     + "spring.datasource.hikari.connection-timeout, or raise max.poll.interval.ms.")
                     .formatted(worstCase, attempts, attemptCost, backOff, maxPollInterval));
         }

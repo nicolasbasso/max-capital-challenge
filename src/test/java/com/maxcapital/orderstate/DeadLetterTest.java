@@ -31,7 +31,7 @@ class DeadLetterTest extends IntegrationTestBase {
     @Autowired KafkaListenerEndpointRegistry registry;
     @Autowired OrderRepository orders;
     @Autowired ExecutionLedgerRepository ledger;
-    @Value("${app.kafka.execution-reports-topic}") String topic;
+    @Value("${app.kafka.topics.execution-reports}") String topic;
 
     @Test
     void unErSinIdentidadVaALaDeadLetterYNoBloqueaLoQueVieneDetras() {
@@ -95,7 +95,7 @@ class DeadLetterTest extends IntegrationTestBase {
         try (Consumer<String, String> consumer = new DefaultKafkaConsumerFactory<>(
                 props, new StringDeserializer(), new StringDeserializer()).createConsumer()) {
 
-            consumer.subscribe(List.of(kafkaConfigurations.getDeadLetterTopic()));
+            consumer.subscribe(List.of(kafkaConfigurations.getTopics().getDeadLetter()));
             long limite = System.currentTimeMillis() + 30_000;
             while (System.currentTimeMillis() < limite) {
                 ConsumerRecords<String, String> lote = consumer.poll(Duration.ofMillis(500));

@@ -11,10 +11,19 @@ import org.springframework.kafka.config.TopicBuilder;
 public class KafkaTopicsConfiguration {
 
     private final KafkaConfigurations kafkaConfigurations;
+    private final SettlementConfigurations settlementConfigurations;
 
     @Bean
     NewTopic executionReportsNewTopic() {
-        return TopicBuilder.name(kafkaConfigurations.getExecutionReportsTopic())
+        return TopicBuilder.name(kafkaConfigurations.getTopics().getExecutionReports())
+                .partitions(kafkaConfigurations.getPartitions())
+                .replicas(kafkaConfigurations.getReplicas())
+                .build();
+    }
+
+    @Bean
+    NewTopic settlementsNewTopic() {
+        return TopicBuilder.name(settlementConfigurations.getTopic())
                 .partitions(kafkaConfigurations.getPartitions())
                 .replicas(kafkaConfigurations.getReplicas())
                 .build();
@@ -22,7 +31,7 @@ public class KafkaTopicsConfiguration {
 
     @Bean
     NewTopic deadLetterNewTopic() {
-        return TopicBuilder.name(kafkaConfigurations.getDeadLetterTopic())
+        return TopicBuilder.name(kafkaConfigurations.getTopics().getDeadLetter())
                 .partitions(kafkaConfigurations.getPartitions())
                 .replicas(kafkaConfigurations.getReplicas())
                 .build();

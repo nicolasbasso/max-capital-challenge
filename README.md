@@ -7,180 +7,188 @@ El razonamiento detrás del diseño está en [`DECISIONS.md`](./DECISIONS.md).
 La traducción del enunciado a compromisos verificables está en
 [`docs/acceptance-matrix.md`](./docs/acceptance-matrix.md).
 
-## Estado actual
+## Qué hace
 
-> **Slice 1 - un ER recorre el sistema.** Un `NEW` publicado en Kafka se consume, se persiste como orden
-> con su entrada de ledger, y se puede consultar por HTTP.
->
-> Todavía **no** están: la máquina de estados y la terminalidad (D-005), las dos instancias en paralelo,
-> las fallas inyectadas, el manejo de errores y cuarentena (D-006), y el settlement (D-007). Esas
-> decisiones siguen abiertas y documentadas como preguntas en `DECISIONS.md`, no como conclusiones.
-
-Este README se completa con los escenarios de demostración a medida que cada garantía se
-implementa y se demuestra. No describe capacidades que el código todavía no tenga.
+- Consume ER de Kafka con `numericOrderId` como key: todos los ER de una orden caen en la misma
+  partición y los aplica un solo consumidor por vez.
+- Computa el estado nuevo sobre el persistido; nunca sobreescribe con el último ER.
+- Deduplica por `(numericOrderId, fixId)` con una restricción única en PostgreSQL.
+- Un ER que no se puede aplicar se preserva en cuarentena y la orden queda `INCOMPLETE`.
+- Un ER que rompe el contrato va a un dead-letter topic; el consumidor sigue.
+- Al completarse una orden publica un `settlement` a un topic downstream, y si después algo la
+  contradice publica un aviso.
+- Todo se consulta por HTTP: estado, ledger, cuarentena y qué se le informó a downstream.
 
 ## Requisitos
 
-- **Java 21.** El enunciado admite Java 21 o 25; se eligió 21 por ser el LTS con el soporte
-  más maduro en Spring Boot, Testcontainers y drivers. Ninguna garantía del challenge
-  necesita una feature exclusiva de 25.
-- Docker y Docker Compose (para las etapas siguientes).
-- Maven **no** hace falta: el repositorio incluye el wrapper (`./mvnw`).
+- **Java 21.** El enunciado admite Java 21 o 25; se eligió 21 por ser el LTS con el soporte más
+  maduro en Spring Boot, Testcontainers y drivers. El build **falla explícitamente** con otro JDK:
+  la restricción del enunciado es una condición del build, no una nota al pie.
+- Docker y Docker Compose.
+- Maven no hace falta: el repositorio incluye el wrapper (`./mvnw`).
 
-El build **falla explícitamente** si se corre con un JDK distinto de 21. Es deliberado: la
-restricción del enunciado es una condición del build, no una nota al pie.
-
-### Fijar Java 21 sin alterar el resto de la máquina
-
-En macOS con Homebrew:
+En macOS con Homebrew, `openjdk@21` es keg-only y convive con otros JDK:
 
 ```bash
 export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
 ```
 
-`openjdk@21` es keg-only: convive con otros JDK instalados sin ocupar el `java` del `PATH`.
-La variable se exporta por shell o por proyecto; no hay que cambiar el `JAVA_HOME` global.
-
-## Correr
+## Levantar todo
 
 ```bash
-./mvnw clean verify
+docker compose up -d --build
 ```
 
-Compila, corre los tests y empaqueta. Debe terminar en `BUILD SUCCESS`.
+Levanta PostgreSQL (`5433`), Kafka (`19092`) y **dos instancias del servicio**, en `8081` y `8082`.
+Las dos comparten el mismo consumer group.
+
+Los servicios de aplicación no declaran healthcheck, así que `up -d` vuelve antes de que estén
+listos. La primera vez compila el proyecto dentro de la imagen, así que tarda unos minutos; con las
+imágenes ya construidas, unos quince segundos. Esperá a ver:
 
 ```bash
-./mvnw spring-boot:run
+docker compose logs -f app-1 | grep "Started OrderStateServiceApplication"
 ```
 
-Levanta el servicio en `http://localhost:8080`. Necesita la infraestructura arriba
-(`docker compose up -d`).
-
-### Mutation testing
-
-```bash
-./mvnw test-compile org.pitest:pitest-maven:mutationCoverage
-```
-
-Genera el reporte en `target/pit-reports/`. No está atado a ninguna fase del ciclo de vida, así que no
-encarece un `verify` normal.
-
-La pregunta que responde no es *cuánto código tocan los tests*, sino **si los tests detectan un cambio de
-comportamiento**. PIT altera el bytecode (invierte condiciones, cambia retornos, elimina llamadas) y verifica
-que algún test falle. Un mutante que sobrevive es una línea que se puede romper sin que ninguna prueba se
-entere.
-
-Mientras no exista lógica de dominio no se generan mutantes. El umbral de mutation score se activa junto con
-la máquina de estados de la orden.
-
-### Levantar la infraestructura
-
-```bash
-docker compose up -d
-```
-
-Levanta PostgreSQL en el puerto `5433` y Kafka en el `19092`. Los puertos y los nombres de contenedor son
-propios del proyecto para no colisionar con otros stacks.
+Para bajar todo y borrar los datos:
 
 ```bash
 docker compose down -v
 ```
 
-Baja todo y borra el volumen de datos.
+## El recorrido completo
 
-### Consultar una orden
+Todo lo de abajo está verificado; los comandos se copian tal cual. Conviene tener abierto:
 
 ```bash
-curl -s http://localhost:8080/orders/13144742 | jq
+docker compose logs -f app-1 app-2
 ```
 
-Devuelve estado, cantidad de ejecuciones aplicadas y el ledger en orden de inserción. Una orden inexistente
-devuelve `404` con el código `ORDER_NOT_FOUND`.
+Un ER necesita seis campos: `fixId`, `numericOrderId`, `status` y los tres montos. El resto del
+mensaje real se conserva entero en `rawPayload` aunque no esté modelado.
 
-### Variables de entorno
+### 1. Un ER entra y crea la orden
 
-| Variable | Default | Para qué |
-|---|---|---|
-| `SERVER_PORT` | `8080` | Puerto HTTP. |
-| `APP_INSTANCE_ID` | `local` | Identifica la instancia en cada línea de log. Permite correlacionar qué orden procesó cuál de las dos instancias cuando haya que demostrarlo. |
-
-## Ejercitar los escenarios a mano
-
-Todo lo de abajo está verificado; los comandos se pueden copiar tal cual.
-
-### Preparar
+La key del mensaje es el `numericOrderId`: es lo que hace que todos los ER de una orden caigan en la
+misma partición.
 
 ```bash
-docker compose up -d
-./mvnw clean package
-java -jar target/order-state-service-0.0.1-SNAPSHOT.jar
-```
-
-### Publicar un execution report
-
-La key del mensaje es el `numericOrderId`: es lo que hace que todos los ER de una orden caigan en
-la misma partición.
-
-```bash
-echo '13144742:{"fixId":"FIX-0001","numericOrderId":13144742,"status":"NEW","ticker":"VSCPC"}' \
+echo '700001:{"fixId":"FIX-0001","numericOrderId":700001,"status":"NEW","nominalAmounts":4956,"accumulativeNominalAmount":0,"leavesNominalAmount":4956}' \
   | docker exec -i maxcapital-kafka /opt/kafka/bin/kafka-console-producer.sh \
       --bootstrap-server localhost:9092 --topic execution-reports \
       --property parse.key=true --property key.separator=:
 ```
 
-En el log del servicio:
-
-```
-INFO ExecutionReportConsumer - applied numericOrderId=13144742 fixId=FIX-0001 partition=2 offset=0
+```bash
+curl -s http://localhost:8081/orders/700001
 ```
 
-### Consultar la orden
+Devuelve `status: NEW`, `appliedExecutions: 1` y el ledger con una entrada. Una orden inexistente
+devuelve `404` con `ORDER_NOT_FOUND`.
+
+Consultá la misma orden en `8082`: las dos instancias comparten la base, así que da lo mismo.
+
+### 2. El mismo ER otra vez no se aplica dos veces
+
+Publicá **exactamente el mismo mensaje**. En el log:
+
+```
+duplicate ignored numericOrderId=700001 fixId=FIX-0001 partition=3 offset=1
+```
+
+`appliedExecutions` sigue en 1 y el ledger sigue con una entrada. La barrera es la restricción única,
+no una comprobación previa en memoria:
 
 ```bash
-curl -s http://localhost:8080/orders/13144742 | jq
+docker exec maxcapital-postgres psql -U orderstate -d orderstate -c "\d execution_ledger"
 ```
 
-```json
-{
-  "numericOrderId": 13144742,
-  "status": "NEW",
-  "appliedExecutions": 1,
-  "ledger": [
-    { "id": 1, "fixId": "FIX-0001", "status": "NEW", "recordedAt": "..." }
-  ]
-}
+### 3. La orden se completa y sale el settlement
+
+```bash
+echo '700001:{"fixId":"FIX-0002","numericOrderId":700001,"status":"FILLED","nominalAmounts":4956,"accumulativeNominalAmount":4956,"leavesNominalAmount":0}' \
+  | docker exec -i maxcapital-kafka /opt/kafka/bin/kafka-console-producer.sh \
+      --bootstrap-server localhost:9092 --topic execution-reports \
+      --property parse.key=true --property key.separator=:
 ```
 
-Una orden inexistente devuelve `404` con `ORDER_NOT_FOUND`.
+Un barrido publica el settlement al segundo siguiente, sin que nadie lo invoque:
 
-### Duplicado
-
-Publicar **exactamente el mismo mensaje** otra vez. El servicio lo detecta y no lo aplica:
-
-```
-INFO ExecutionReportConsumer - duplicate ignored numericOrderId=13144742 fixId=FIX-0001 partition=2 offset=1
+```bash
+docker exec maxcapital-kafka /opt/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server localhost:9092 --topic order-settlements \
+  --from-beginning --timeout-ms 4000
 ```
 
-El estado no cambia: `appliedExecutions` sigue en 1 y el ledger sigue con una entrada.
+```
+{"type":"ORDER_SETTLED","numericOrderId":700001}
+```
 
-Esto cubre el **duplicado del emisor**: el mismo ER publicado dos veces. La **reentrega tras una
-caída** entre el commit de PostgreSQL y el del offset todavía no está demostrada; es T5.3.
+Un solo mensaje, aunque las dos instancias barren cada segundo.
 
-### Ver la evidencia en los tres lugares
+### 4. Un ER que llega tarde congela la orden y avisa
 
-Esta es la parte que importa: los tres números cuentan la misma historia desde sistemas distintos.
+```bash
+echo '700001:{"fixId":"FIX-0003","numericOrderId":700001,"status":"PARTIALLY_FILLED","nominalAmounts":4956,"accumulativeNominalAmount":2000,"leavesNominalAmount":2956}' \
+  | docker exec -i maxcapital-kafka /opt/kafka/bin/kafka-console-producer.sh \
+      --bootstrap-server localhost:9092 --topic execution-reports \
+      --property parse.key=true --property key.separator=:
+```
 
-**Cuántos mensajes hay en el topic y hasta dónde llegó el consumidor:**
+No se aplica sobre una orden ya terminal: se preserva en cuarentena y la orden pasa a `INCOMPLETE`.
+Como ya se le había informado el completado a downstream, sale un segundo mensaje:
+
+```
+{"type":"ORDER_SETTLED","numericOrderId":700001}
+{"type":"ORDER_MARKED_INCOMPLETE","numericOrderId":700001}
+```
+
+En ese orden, garantizado por ir al mismo topic con la misma key.
+
+```bash
+curl -s http://localhost:8081/orders/700001
+```
+
+Ahora muestra `status: INCOMPLETE`, el ER rechazado en `quarantine` con el estado que tenía la orden
+al rechazarlo, y las dos marcas de lo que se le informó a downstream:
+
+```
+"status": "INCOMPLETE", "appliedExecutions": 2,
+"settlementPublishedAt": "...", "markedIncompleteNotifiedAt": "..."
+```
+
+### 5. Un ER que rompe el contrato no bloquea el flujo
+
+```bash
+echo '700002:{"fixId":"FIX-BAD","numericOrderId":700002,"status":"BOGUS","nominalAmounts":4956,"accumulativeNominalAmount":0,"leavesNominalAmount":4956}' \
+  | docker exec -i maxcapital-kafka /opt/kafka/bin/kafka-console-producer.sh \
+      --bootstrap-server localhost:9092 --topic execution-reports \
+      --property parse.key=true --property key.separator=:
+```
+
+`BOGUS` no es un estado del contrato. El ER no se persiste, se preserva entero en el dead-letter
+topic, y el consumidor sigue procesando lo que venga detrás:
+
+```bash
+docker exec maxcapital-kafka /opt/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server localhost:9092 --topic execution-reports-dlt \
+  --from-beginning --timeout-ms 4000
+```
+
+`curl http://localhost:8081/orders/700002` devuelve `404`: no se creó nada.
+
+## Ver la evidencia en los tres lugares
+
+Los tres números cuentan la misma historia desde sistemas distintos.
+
+**Hasta dónde llegó cada instancia y cuánto le falta:**
 
 ```bash
 docker exec maxcapital-kafka /opt/kafka/bin/kafka-consumer-groups.sh \
   --bootstrap-server localhost:9092 --describe --group order-state-service
 ```
 
-```
-GROUP                TOPIC              PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG
-order-state-service  execution-reports  2          2               2               0
-```
+Con `--members` se ve el reparto de particiones entre las dos instancias.
 
 **Los mensajes siguen en el log, consumidos y todo:**
 
@@ -194,33 +202,61 @@ docker exec maxcapital-kafka /opt/kafka/bin/kafka-console-consumer.sh \
 
 ```bash
 docker exec maxcapital-postgres psql -U orderstate -d orderstate \
-  -c "SELECT numeric_order_id, status, applied_executions FROM orders;" \
-  -c "SELECT id, numeric_order_id, fix_id, status FROM execution_ledger ORDER BY id;"
+  -c "SELECT numeric_order_id, status, applied_executions, settlement_published_at FROM orders ORDER BY numeric_order_id;" \
+  -c "SELECT id, numeric_order_id, fix_id, status FROM execution_ledger ORDER BY id;" \
+  -c "SELECT numeric_order_id, fix_id, order_status_at_rejection, reason FROM execution_quarantine;"
 ```
 
-Dos mensajes consumidos, una sola aplicación. La barrera que lo impide es la restricción única:
+El contador de la orden y la cantidad de filas del ledger tienen que coincidir siempre.
+
+## Tests
 
 ```bash
-docker exec maxcapital-postgres psql -U orderstate -d orderstate -c "\d execution_ledger"
+./mvnw clean verify
 ```
 
-```
-"uq_execution_ledger_order_fix" UNIQUE CONSTRAINT, btree (numeric_order_id, fix_id)
+90 tests, con PostgreSQL y Kafka reales vía Testcontainers. Cubren el ciclo de vida, la
+deduplicación, la máquina de estados, la política de errores, la coerción del contrato y el
+settlement con sus casos de falla.
+
+```bash
+./mvnw test-compile org.pitest:pitest-maven:mutationCoverage
 ```
 
-## Verificación de Slice 0
+Mutation testing. La pregunta que responde no es *cuánto código tocan los tests*, sino **si los
+tests detectan un cambio de comportamiento**: PIT altera el bytecode y verifica que algún test
+falle. Un mutante que sobrevive es una línea que se puede romper sin que ninguna prueba se entere.
+El reporte queda en `target/pit-reports/`.
 
-| Qué se demuestra | Cómo | Resultado |
+## Puertos y variables
+
+| | |
+|---|---|
+| `app-1` | `http://localhost:8081` |
+| `app-2` | `http://localhost:8082` |
+| PostgreSQL | `5433` |
+| Kafka | `19092` |
+
+| Variable | Default | Para qué |
 |---|---|---|
-| El build limpio pasa con Java 21 | `./mvnw clean verify` | `BUILD SUCCESS`, 2 tests en verde |
-| El build rechaza un JDK no permitido | `JAVA_HOME=<jdk-no-21> ./mvnw clean verify` | `BUILD FAILURE` con el mensaje del enforcer |
-| El artefacto empaquetado arranca | `java -jar target/order-state-service-0.0.1-SNAPSHOT.jar` | `Started OrderStateServiceApplication` |
+| `APP_INSTANCE_ID` | `local` | Identifica la instancia en cada línea de log |
+| `ER_TOPIC` | `execution-reports` | Topic de entrada |
+| `ER_DLT` | `execution-reports-dlt` | Dead-letter topic |
+| `SETTLEMENT_TOPIC` | `order-settlements` | Topic de settlement y avisos |
+| `ER_PARTITIONS` | `4` | Fija durante el ejercicio: cambiarla remapea claves |
+| `ER_RETRY_MAX_ATTEMPTS` | `3` | Reintentos ante una falla transitoria |
+| `SETTLEMENT_SWEEP_INTERVAL` | `1s` | Cada cuánto se busca qué publicar |
+
+El servicio **no arranca** si el peor caso de reintentos no entra en un `max.poll.interval.ms`. Es
+deliberado: la garantía vive en el código y no en un comentario.
 
 ## Sobre el proceso
 
-Las decisiones de diseño de este repositorio se trabajaron usando un modelo de lenguaje como *sparring*: para
-cuestionar alternativas, forzar escenarios de falla concretos y contrastar afirmaciones contra la documentación
-oficial de cada tecnología. Los commits llevan el trailer `Co-Authored-By` correspondiente.
+Las decisiones de diseño de este repositorio se trabajaron usando un modelo de lenguaje como
+*sparring*: para cuestionar alternativas, forzar escenarios de falla concretos y contrastar
+afirmaciones contra la documentación oficial de cada tecnología. Los commits llevan el trailer
+`Co-Authored-By` correspondiente.
 
-El razonamiento y los trade-offs registrados en [`DECISIONS.md`](./DECISIONS.md) son propios y defendibles uno
-por uno, incluyendo qué garantiza cada componente, qué no garantiza, y qué se resignó a conciencia.
+El razonamiento y los trade-offs registrados en [`DECISIONS.md`](./DECISIONS.md) son propios y
+defendibles uno por uno, incluyendo qué garantiza cada componente, qué no garantiza, y qué se
+resignó a conciencia.

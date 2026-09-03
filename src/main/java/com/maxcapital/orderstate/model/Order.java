@@ -2,12 +2,14 @@ package com.maxcapital.orderstate.model;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.DynamicUpdate;
 import org.hibernate.annotations.Generated;
 import org.hibernate.generator.EventType;
 
 import java.time.Instant;
 
 @Entity
+@DynamicUpdate
 @Table(name = "orders")
 @Getter
 @Builder
@@ -33,6 +35,12 @@ public class Order {
     @Column(name = "updated_at", nullable = false, insertable = false, updatable = false)
     private Instant updatedAt;
 
+    @Column(name = "settlement_published_at")
+    private Instant settlementPublishedAt;
+
+    @Column(name = "marked_incomplete_notified_at")
+    private Instant markedIncompleteNotifiedAt;
+
     public static Order opening(Long numericOrderId) {
         return Order.builder()
                 .numericOrderId(numericOrderId)
@@ -50,5 +58,13 @@ public class Order {
 
     public void freeze() {
         this.status = OrderStatus.INCOMPLETE;
+    }
+
+    public void settlementPublished(Instant at) {
+        this.settlementPublishedAt = at;
+    }
+
+    public void markedIncompleteNotified(Instant at) {
+        this.markedIncompleteNotifiedAt = at;
     }
 }

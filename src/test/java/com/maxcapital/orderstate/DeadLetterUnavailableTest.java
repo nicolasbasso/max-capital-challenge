@@ -21,7 +21,7 @@ class DeadLetterUnavailableTest extends IntegrationTestBase {
     @Autowired KafkaListenerEndpointRegistry registry;
     @Autowired KafkaConfigurations kafkaConfigurations;
     @Autowired OrderRepository orders;
-    @Value("${app.kafka.execution-reports-topic}") String topic;
+    @Value("${app.kafka.topics.execution-reports}") String topic;
 
     @AfterEach
     void devolverLaIngestaAsuEstadoNormal() {
@@ -52,7 +52,7 @@ class DeadLetterUnavailableTest extends IntegrationTestBase {
         DeadLetterFailureInjection.reset();
         registry.start();
 
-        assertThat(DeadLetters.esperar(KAFKA.getBootstrapServers(), kafkaConfigurations.getDeadLetterTopic(),
+        assertThat(Topics.esperar(KAFKA.getBootstrapServers(), kafkaConfigurations.getTopics().getDeadLetter(),
                 String.valueOf(numericOrderId), Duration.ofSeconds(45)))
                 .as("el offset nunca se commiteó, así que al volver la dead letter el ER se preserva igual")
                 .isNotNull();

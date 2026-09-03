@@ -5,6 +5,7 @@ import com.maxcapital.orderstate.model.OrderStatus;
 import lombok.Builder;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 
 @Builder
@@ -15,6 +16,8 @@ public record OrderResponse(
         BigDecimal nominalAmount,
         BigDecimal accumulativeNominalAmount,
         BigDecimal leavesNominalAmount,
+        Instant settlementPublishedAt,
+        Instant markedIncompleteNotifiedAt,
         List<LedgerEntryResponse> ledger,
         List<QuarantinedEntryResponse> quarantine
 ) {
@@ -26,6 +29,8 @@ public record OrderResponse(
                 .nominalAmount(order.getAmounts().getNominalAmount())
                 .accumulativeNominalAmount(order.getAmounts().getAccumulativeNominalAmount())
                 .leavesNominalAmount(order.getAmounts().getLeavesNominalAmount())
+                .settlementPublishedAt(order.getSettlementPublishedAt())
+                .markedIncompleteNotifiedAt(order.getMarkedIncompleteNotifiedAt())
                 .ledger(ledger)
                 .quarantine(quarantine)
                 .build();

@@ -18,7 +18,7 @@ class TransientFailurePauseTest extends IntegrationTestBase {
     @Autowired KafkaTemplate<String, String> kafka;
     @Autowired KafkaListenerEndpointRegistry registry;
     @Autowired OrderRepository orders;
-    @Value("${app.kafka.execution-reports-topic}") String topic;
+    @Value("${app.kafka.topics.execution-reports}") String topic;
 
     @AfterEach
     void devolverElConsumidorAsuEstadoNormal() {
