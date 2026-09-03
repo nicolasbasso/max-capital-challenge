@@ -36,5 +36,8 @@ public class SettlementConfigurations {
 
         @Positive
         private int batchSize;
+
+        @Positive
+        private int poolSize;
     }
 }

@@ -427,6 +427,27 @@ publicación física al broker no es exactly-once por sí sola, y dónde vive re
 
 4. `FOR UPDATE SKIP LOCKED` al final no era lo que buscabamos sino lo que Hibernate 6 nos dió para esto es `FOR NO KEY UPDATE SKIP LOCKED` cuando aplicamos @Lock(PESSIMISTIC_WRITE). Este no es lock mas fuerte, sino que lo que nos ofrece es bloquear la fila hasta terminar para que esa fila no sea levantada por otro barrido y nos evita la concurrencia, y permite que el consumidor escriba el ledger cuando tomamos la FK de la orden para sumar al ledger.
 
+5. Hallazgo de último momento, los schedulers de los barridos se colgaban del creado para el backoff que pausaba las instancias y no respetaba los numeros de max.poll.interval.ms y además teníamos un pool para 3 schedulers (pausa, barrido FILLED y barrido INCOMPLETE), agregando un pool específico para los barridos tenemos uno sin posibilidad de encolarse para la pausa y otro pool de 2 hilos (configurado por property) para los barridos
+
+   El pausado es del container, no de la instancia: el servicio sigue vivo y el `GET` sigue
+   respondiendo con normalidad, lo único que se detiene es el consumo de ER.
+
+   Medido con la base caída, antes y después de separar los pools:
+
+   ```
+   esperas entre reintentos   antes  60s / 90s / 90s      configuradas  0,5s / 1s / 2s
+   peor caso hasta frenar     antes  271s                 validado al arrancar  123,5s
+                              ahora  125s
+   expulsiones por poll timeout   0 en las dos instancias  (max.poll.interval.ms = 300s)
+   ```
+
+   Y la prueba de que los pools quedaron separados es el hilo que aparece en el log:
+
+   ```
+   antes   [app-2] [er-backoff-1]  settlement published numericOrderId=660001
+   ahora   [app-2] [settlement-1]  settlement published numericOrderId=660001
+   ```
+
 **Evidencia**
 
 | Qué se afirma | Cómo se probó | Resultado |

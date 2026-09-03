@@ -1,6 +1,7 @@
 package com.maxcapital.orderstate;
 
 import com.maxcapital.orderstate.config.SettlementConfigurations;
+import com.maxcapital.orderstate.config.SettlementSchedulerConfiguration;
 import com.maxcapital.orderstate.dto.OrderResponse;
 import com.maxcapital.orderstate.service.OrderQueryService;
 import com.maxcapital.orderstate.model.Order;
@@ -9,6 +10,7 @@ import com.maxcapital.orderstate.repository.ExecutionLedgerRepository;
 import com.maxcapital.orderstate.repository.OrderRepository;
 import com.maxcapital.orderstate.service.SettlementPublisher;
 import com.maxcapital.orderstate.service.impl.SettlementPublisherImpl;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor;
 
 import java.util.Set;
@@ -172,6 +174,19 @@ class SettlementTest extends IntegrationTestBase {
                         + "y en producción no hay nadie que lo haga")
                 .containsExactlyInAnyOrder(publicador + ".publishPendingSettlements",
                         publicador + ".publishPendingIncompleteNotices");
+    }
+
+    @Test
+    void losBarridosNoCorrenEnElSchedulerDelBackoffDeKafka() throws Exception {
+        for (String metodo : List.of("publishPendingSettlements", "publishPendingIncompleteNotices")) {
+            Scheduled agendado = SettlementPublisherImpl.class.getMethod(metodo).getAnnotation(Scheduled.class);
+            assertThat(agendado.scheduler())
+                    .as("sin declarar el scheduler, los barridos toman el único TaskScheduler del "
+                            + "contexto, que es el del backoff de Kafka: comparten un hilo con la "
+                            + "tarea que despausa el container y estiran el presupuesto de reintentos")
+                    .isEqualTo(SettlementSchedulerConfiguration.SETTLEMENT_SCHEDULER);
+        }
+        assertThat(scheduledPostProcessor.getScheduledTasks()).isNotEmpty();
     }
 
     private void completar(long numericOrderId) {

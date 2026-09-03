@@ -3,6 +3,7 @@ package com.maxcapital.orderstate.service.impl;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.maxcapital.orderstate.config.SettlementConfigurations;
+import com.maxcapital.orderstate.config.SettlementSchedulerConfiguration;
 import com.maxcapital.orderstate.dto.OrderEventMessage;
 import com.maxcapital.orderstate.model.Order;
 import com.maxcapital.orderstate.repository.OrderRepository;
@@ -37,13 +38,15 @@ public class SettlementPublisherImpl implements SettlementPublisher {
     private final TransactionTemplate transactionTemplate;
 
     @Override
-    @Scheduled(fixedDelayString = "${app.settlement.sweep.interval}")
+    @Scheduled(fixedDelayString = "${app.settlement.sweep.interval}",
+            scheduler = SettlementSchedulerConfiguration.SETTLEMENT_SCHEDULER)
     public void publishPendingSettlements() {
         sweep(this::publishNextSettlement);
     }
 
     @Override
-    @Scheduled(fixedDelayString = "${app.settlement.sweep.interval}")
+    @Scheduled(fixedDelayString = "${app.settlement.sweep.interval}",
+            scheduler = SettlementSchedulerConfiguration.SETTLEMENT_SCHEDULER)
     public void publishPendingIncompleteNotices() {
         sweep(this::publishNextIncompleteNotice);
     }
