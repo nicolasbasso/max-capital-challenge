@@ -30,7 +30,7 @@ public class DeadLetterFailureInjection {
                                                                KafkaConfigurations kafkaConfigurations) {
         return new DeadLetterPublishingRecoverer(kafkaOperations,
                 (record, exception) -> new TopicPartition(
-                        kafkaConfigurations.getDeadLetterTopic(), record.partition())) {
+                        kafkaConfigurations.getTopics().getDeadLetter(), record.partition())) {
 
             @Override
             public void accept(ConsumerRecord<?, ?> record, Exception exception) {

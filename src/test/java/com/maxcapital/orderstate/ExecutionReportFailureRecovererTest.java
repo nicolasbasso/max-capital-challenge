@@ -39,8 +39,10 @@ class ExecutionReportFailureRecovererTest {
         ObjectProvider<KafkaListenerEndpointRegistry> provider = mock(ObjectProvider.class);
         when(provider.getObject()).thenReturn(registry);
 
-        KafkaConfigurations configurations = mock(KafkaConfigurations.class);
-        when(configurations.getRetryMaxAttempts()).thenReturn(3);
+        KafkaConfigurations.Retry retry = new KafkaConfigurations.Retry();
+        retry.setMaxAttempts(3);
+        KafkaConfigurations configurations = new KafkaConfigurations();
+        configurations.setRetry(retry);
 
         recoverer = new ExecutionReportFailureRecoverer(deadLetter, provider, configurations);
     }

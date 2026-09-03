@@ -8,13 +8,35 @@ import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.test.utils.KafkaTestUtils;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-final class DeadLetters {
+final class Topics {
 
-    private DeadLetters() {
+    private Topics() {
+    }
+
+    static List<ConsumerRecord<String, String>> leerTodo(String bootstrapServers, String topic,
+                                                        Duration durante) {
+        List<ConsumerRecord<String, String>> leidos = new ArrayList<>();
+        try (Consumer<String, String> consumer = nuevoConsumidor(bootstrapServers, topic)) {
+            long limite = System.currentTimeMillis() + durante.toMillis();
+            while (System.currentTimeMillis() < limite) {
+                consumer.poll(Duration.ofMillis(300)).forEach(leidos::add);
+            }
+        }
+        return leidos;
+    }
+
+    private static Consumer<String, String> nuevoConsumidor(String bootstrapServers, String topic) {
+        Map<String, Object> props = KafkaTestUtils.consumerProps(
+                bootstrapServers, "probe-" + UUID.randomUUID(), "true");
+        Consumer<String, String> consumer = new DefaultKafkaConsumerFactory<>(
+                props, new StringDeserializer(), new StringDeserializer()).createConsumer();
+        consumer.subscribe(List.of(topic));
+        return consumer;
     }
 
     static ConsumerRecord<String, String> esperar(String bootstrapServers, String topic, String contiene,

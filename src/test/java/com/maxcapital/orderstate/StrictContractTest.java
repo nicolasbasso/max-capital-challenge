@@ -18,7 +18,7 @@ class StrictContractTest extends IntegrationTestBase {
     @Autowired OrderRepository orders;
     @Autowired ExecutionLedgerRepository ledger;
     @Autowired KafkaConfigurations kafkaConfigurations;
-    @Value("${app.kafka.execution-reports-topic}") String topic;
+    @Value("${app.kafka.topics.execution-reports}") String topic;
 
     @Test
     void unNumericOrderIdDecimalNoSeTruncaSobreUnaOrdenSana() {
@@ -89,8 +89,90 @@ class StrictContractTest extends IntegrationTestBase {
         assertThat(enLaDeadLetter("\"numericOrderId\":\"993003\"")).isNotNull();
     }
 
+    @Test
+    void unMontoComoStringNoSeAcepta() {
+        long numericOrderId = 993004L;
+
+        kafka.send(topic, String.valueOf(numericOrderId), """
+                {"fixId":"FIX-993004","numericOrderId":%d,"status":"NEW",
+                 "nominalAmounts":"4956","accumulativeNominalAmount":0,"leavesNominalAmount":4956}
+                """.formatted(numericOrderId));
+
+        kafka.send(topic, String.valueOf(numericOrderId), ExecutionReports.raw(
+                ExecutionReports.er("FIX-993004-OK", numericOrderId, OrderStatus.NEW)));
+        assertThat(esperarElFixId(numericOrderId, "FIX-993004-OK")).isTrue();
+
+        assertThat(orders.findById(numericOrderId).orElseThrow().getAppliedExecutions())
+                .as("un monto es un número: el string no entra por coerción")
+                .isEqualTo(1);
+        assertThat(enLaDeadLetter("\"nominalAmounts\":\"4956\"")).isNotNull();
+    }
+
+    @Test
+    void unMontoEnteroSiSeAceptaPorqueEsUnDecimalValido() {
+        long numericOrderId = 993005L;
+
+        kafka.send(topic, String.valueOf(numericOrderId), """
+                {"fixId":"FIX-993005","numericOrderId":%d,"status":"NEW",
+                 "nominalAmounts":4956,"accumulativeNominalAmount":0,"leavesNominalAmount":4956}
+                """.formatted(numericOrderId));
+        assertThat(esperarElFixId(numericOrderId, "FIX-993005"))
+                .as("endurecer la coerción no puede rechazar un entero donde va un decimal: "
+                        + "así vienen los montos del enunciado")
+                .isTrue();
+    }
+
+    @Test
+    void unStatusBooleanoNoSeAcepta() {
+        long numericOrderId = 993006L;
+
+        kafka.send(topic, String.valueOf(numericOrderId), """
+                {"fixId":"FIX-993006","numericOrderId":%d,"status":true,
+                 "nominalAmounts":4956,"accumulativeNominalAmount":0,"leavesNominalAmount":4956}
+                """.formatted(numericOrderId));
+
+        kafka.send(topic, String.valueOf(numericOrderId), ExecutionReports.raw(
+                ExecutionReports.er("FIX-993006-OK", numericOrderId, OrderStatus.NEW)));
+        assertThat(esperarElFixId(numericOrderId, "FIX-993006-OK")).isTrue();
+
+        assertThat(orders.findById(numericOrderId).orElseThrow().getAppliedExecutions()).isEqualTo(1);
+    }
+
+    @Test
+    void unFixIdNumericoSeAceptaPorqueAsiLoMandaElProveedor() {
+        long numericOrderId = 993007L;
+
+        kafka.send(topic, String.valueOf(numericOrderId), """
+                {"fixId":523130930000307,"numericOrderId":%d,"status":"NEW",
+                 "nominalAmounts":4956,"accumulativeNominalAmount":0,"leavesNominalAmount":4956}
+                """.formatted(numericOrderId));
+
+        assertThat(esperarElFixId(numericOrderId, "523130930000307"))
+                .as("el enunciado manda el fixId sin comillas: rechazarlo sería rechazar "
+                        + "todos los mensajes reales")
+                .isTrue();
+    }
+
+    @Test
+    void unFixIdDecimalNoSeAceptaPorqueCambiaElIdentificador() {
+        long numericOrderId = 993008L;
+
+        kafka.send(topic, String.valueOf(numericOrderId), """
+                {"fixId":5.23130930000307e14,"numericOrderId":%d,"status":"NEW",
+                 "nominalAmounts":4956,"accumulativeNominalAmount":0,"leavesNominalAmount":4956}
+                """.formatted(numericOrderId));
+
+        kafka.send(topic, String.valueOf(numericOrderId), ExecutionReports.raw(
+                ExecutionReports.er("FIX-993008-OK", numericOrderId, OrderStatus.NEW)));
+        assertThat(esperarElFixId(numericOrderId, "FIX-993008-OK")).isTrue();
+
+        assertThat(orders.findById(numericOrderId).orElseThrow().getAppliedExecutions())
+                .as("el mismo id en notación científica daría otra clave de deduplicación")
+                .isEqualTo(1);
+    }
+
     private org.apache.kafka.clients.consumer.ConsumerRecord<String, String> enLaDeadLetter(String contiene) {
-        return DeadLetters.esperar(KAFKA.getBootstrapServers(), kafkaConfigurations.getDeadLetterTopic(),
+        return Topics.esperar(KAFKA.getBootstrapServers(), kafkaConfigurations.getTopics().getDeadLetter(),
                 contiene, java.time.Duration.ofSeconds(30));
     }
 

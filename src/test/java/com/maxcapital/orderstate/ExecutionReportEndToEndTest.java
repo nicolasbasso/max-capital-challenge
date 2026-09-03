@@ -22,7 +22,7 @@ class ExecutionReportEndToEndTest extends IntegrationTestBase {
     @Autowired OrderRepository orders;
     @Autowired ExecutionLedgerRepository ledger;
     @Autowired TestRestTemplate http;
-    @Value("${app.kafka.execution-reports-topic}") String topic;
+    @Value("${app.kafka.topics.execution-reports}") String topic;
 
     @Test
     void unNewRecorreElSistemaYQuedaConsultable() {

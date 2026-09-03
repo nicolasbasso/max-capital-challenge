@@ -21,7 +21,7 @@ class TransientFailureExhaustionTest extends IntegrationTestBase {
     @Autowired KafkaListenerEndpointRegistry registry;
     @Autowired OrderRepository orders;
     @Autowired KafkaConfigurations kafkaConfigurations;
-    @Value("${app.kafka.execution-reports-topic}") String topic;
+    @Value("${app.kafka.topics.execution-reports}") String topic;
 
     @AfterEach
     void devolverLaIngestaAsuEstadoNormal() {
@@ -43,8 +43,8 @@ class TransientFailureExhaustionTest extends IntegrationTestBase {
 
         assertThat(TransientFailureInjection.invocaciones())
                 .as("un intento inicial más los %d reintentos configurados: ni menos, ni para siempre"
-                        .formatted(kafkaConfigurations.getRetryMaxAttempts()))
-                .isEqualTo(kafkaConfigurations.getRetryMaxAttempts() + 1);
+                        .formatted(kafkaConfigurations.getRetry().getMaxAttempts()))
+                .isEqualTo(kafkaConfigurations.getRetry().getMaxAttempts() + 1);
 
         assertThat(orders.findById(numericOrderId))
                 .as("nada se aplicó: el fallo era del entorno, no del mensaje")
