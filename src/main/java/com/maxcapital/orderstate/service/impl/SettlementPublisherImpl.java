@@ -48,10 +48,10 @@ public class SettlementPublisherImpl implements SettlementPublisher {
         sweep(this::publishNextIncompleteNotice);
     }
 
-    private void sweep(BooleanSupplier publicarLaSiguiente) {
-        int publicadas = 0;
-        while (publicadas < settlementConfigurations.getSweep().getBatchSize() && publicarLaSiguiente.getAsBoolean()) {
-            publicadas++;
+    private void sweep(BooleanSupplier publishNext) {
+        int published = 0;
+        while (published < settlementConfigurations.getSweep().getBatchSize() && publishNext.getAsBoolean()) {
+            published++;
         }
     }
 

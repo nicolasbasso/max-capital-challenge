@@ -45,7 +45,7 @@ public class Order {
         return Order.builder()
                 .numericOrderId(numericOrderId)
                 .status(OrderStatus.NEW)
-                .appliedExecutions(0) //TODO: hace falta? int no inicializa en 0 ?
+                .appliedExecutions(0)
                 .amounts(ExecutionAmounts.zero())
                 .build();
     }
@@ -60,11 +60,11 @@ public class Order {
         this.status = OrderStatus.INCOMPLETE;
     }
 
-    public void settlementPublished(Instant at) { //TODO: usar lombok
+    public void settlementPublished(Instant at) {
         this.settlementPublishedAt = at;
     }
 
-    public void markedIncompleteNotified(Instant at) { //TODO: usar lombok
+    public void markedIncompleteNotified(Instant at) {
         this.markedIncompleteNotifiedAt = at;
     }
 }

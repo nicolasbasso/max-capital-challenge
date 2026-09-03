@@ -15,24 +15,24 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 
     String SKIP_LOCKED = "-2";
 
-    @Lock(LockModeType.PESSIMISTIC_WRITE) //TODO: que es esto ?
-    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = SKIP_LOCKED)) //TODO: que es esto ?
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = SKIP_LOCKED))
     @Query("""
             select o from Order o
             where o.status = com.maxcapital.orderstate.model.OrderStatus.FILLED
               and o.settlementPublishedAt is null
             order by o.numericOrderId
-            """) //TODO:hace falta query asi ??
+            """)
     List<Order> lockOrdersPendingSettlement(Pageable pageable);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = SKIP_LOCKED)) //TODO: que es esto ?
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = SKIP_LOCKED))
     @Query("""
             select o from Order o
             where o.status = com.maxcapital.orderstate.model.OrderStatus.INCOMPLETE
               and o.settlementPublishedAt is not null
               and o.markedIncompleteNotifiedAt is null
             order by o.numericOrderId
-            """)  //TODO:hace falta query asi ??
+            """)
     List<Order> lockOrdersPendingIncompleteNotice(Pageable pageable);
 }
