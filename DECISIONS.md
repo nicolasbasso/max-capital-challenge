@@ -29,7 +29,7 @@ Una decisión atraviesa cuatro estados. La distinción importa: elegir no es lo 
 | D-004 | Modelo persistente de orden, ledger y concurrencia | **Elegida** | Verificada con dos instancias reales: contador = ledger, sin duplicados |
 | D-005 | Máquina de estados y terminalidad | **Elegida** | Construida: 30 casos de transición, más el ciclo de vida en docker |
 | D-006 | Errores transitorios, permanentes y orden incompleta | **Elegida** | Cuarentena, dead-letter y backoff, con pruebas en docker |
-| D-007 | Settlement, outbox y deduplicación downstream | Abierta | — |
+| D-007 | Settlement, outbox y deduplicación downstream | **Elegida** | Barrido, aviso de cambio y contrato del mensaje, con pruebas en docker |
 | D-008 | Alcance declarado y trabajo fuera de alcance | Abierta | — |
 
 ---
@@ -344,15 +344,110 @@ Lo que quede sin implementar se documenta acá.
 
 ## D-007 - Settlement, outbox y deduplicación downstream
 
+**Estado:** elegida e implementada.
+
 **Pregunta que debe responder:** ¿cómo se garantiza que una orden `FILLED` produzca exactamente un efecto
 lógico de settlement downstream, sin pérdida ni duplicados, aun con reentregas y dos instancias? ¿Por qué la
 publicación física al broker no es exactly-once por sí sola, y dónde vive realmente la garantía?
 
-**Evidencia que la validará:** `FILLED` crea un settlement; el duplicado de `FILLED` sigue dejando uno;
-`CANCELLED` crea cero. Caída antes de publicar y caída después de publicar antes de registrar el resultado,
-ambas verificadas.
+| Qué pasó | Downstream recibe |
+|---|---|
+| Completa, y el barrido la encuentra `FILLED` | **settlement** |
+| Completa, se publica, después llega un ER tardío | **settlement y aviso**, en ese orden |
+| Completa, y un ER tardío la ensucia **antes** de que el barrido pase | **nada** |
+| Completa, se cae el servicio antes de publicar, nada más llega | settlement, en el barrido siguiente |
+| Termina `CANCELLED` | nada |
+| Queda `INCOMPLETE` sin haber completado nunca | nada |
 
-**Estado:** abierta.
+**Por qué**
+
+1. Como primer instancia evalué que la tabla Order era un outbox perfecto para poder barrer y enviar el mensaje o que downstream trabaje sobre la tabla, pero me di cuenta que el estado podía cambiar y eso lo dejo sin efecto inmediato, no eran datos inmutables, podría sufrir cambios el `status`. A simple vista puede parecer que seguimos utilizando de outbox porque recorremos la misma tabla para dar el aviso, lo que cambió es que la recorremos y avisamos lo que en ese momento es el hecho, y volveríamos a barrer en caso de que haya cambiado, ahi nos cubrimos de la mutabilidad del campo `status`
+2. Después de eso decidí enviar el evento en el momento exacto en que la orden se marcaba `FILLED` porque representaba el hecho, pero me di cuenta que podría haber perdidas y necesitaba el barrido, asi que finalmente me quedé sólo con el barrido.
+
+**Qué decidí**
+
+1. Si bien el enunciado decía explicitamente "cuando una orden se completa ( status = FILLED ), el servicio debe publicar un mensaje de liquidación ( settlement ) hacia un destino downstream (otra cola/topic)." no lo hacemos en el momento porque podemos sufrir la caída entre que terminamos de procesar la `FILLED` y publicamos, para poder prevenir eso deberíamos hacer el barrido de las `FILLED` + `settlement_published_at` == null de todas maneras. Para ahorrarnos eso y que el proceso de una orden quede independiente de la publicación, sólo implementamos el barrido.
+2. El barrido va a hacer una lectura del momento y enviar lo que ve, publicamos un hecho real.
+3. Como medida preventiva de que una orden haya cambiado su estado a `INCOMPLETE` luego de dar el aviso de que su estado fue FILLED vamos a incorporar un segundo barrido y un campo `marked_incomplete_notified_at`, donde vamos a chequear si el estado de la orden es `INCOMPLETE` y su campo `settlement_published_at` != null para informar que su estado cambió a `INCOMPLETE` al downstream y accione frente a eso.
+4. En caso de caída entre que estuvo `FILLED` y luego se marcó como `INCOMPLETE` no se va a enviar nada al downstream, se evaluó envíar `FILLED` y luego `INCOMPLETE` al downstream, estariamos haciendo la reversa de algo que ya sabemos que no es así y como dije en el punto 2 publicamos el hecho que vemos en el momento del barrido.
+5. El payload del mensaje al downstream sólo contendra el `numericOrderId` y un `type` que reflejará el hecho `FILLED` (`ORDER_SETTLED`) o `INCOMPLETE`(`ORDER_MARKED_INCOMPLETE`), puede obtener los datos necesarios desde el GET y si algo llegara a cambiar tenemos el aviso para que la política de cambio actue.
+6. El mensaje al downstream va siempre al mismo tópico y misma key (`numericOrderId`), garantizando el orden de llegada por parte del broker.
+7. Tópico distinto al del ciclo de vida de la orden.
+8. Este nuevo tópico no se compacta porque el `numericOrderId` sería el mismo que en el aviso de `FILLED` y se ignora en el aviso de `INCOMPLETE` porque conserva el último valor por clave, nos paso en una prueba que al compactar por la key asumía que era el mismo mensaje y lo ignoraba, hablando a nivel logs almacenados y en el caso de querer reconstruir los hechos.
+   Un consumidor hubiese recibido ambos eventos, la compactación no impacta los envíos.
+   evidencia en logs:
+
+   ```
+   ANTES de compactar
+     981001    {"type":"ORDER_SETTLED","numericOrderId":981001}
+     981001    {"type":"ORDER_MARKED_INCOMPLETE","numericOrderId":981001}
+
+   DESPUÉS de compactar
+     981001    {"type":"ORDER_MARKED_INCOMPLETE","numericOrderId":981001}
+   ```
+
+9. Poner `FOR UPDATE SKIP LOCKED` así aunque haya N instancias haciendo el barrido hasta no terminar de procesarla no libera la fila y sólo una instancia procesaría ese envío al downstream
+10. Intervalo de 1s, nos da más chance de envíar un aviso de `INCOMPLETE` al downstream, ahora bien si aumentamos este intervalo tendríamos más chances de haber sufrido un cambio en el status y directamente impacta en no informar `FILLED` gracias a que no veamos ese momento porque ya mutó a `INCOMPLETE`. Pero como no sabemos en cuanto tiempo nos va a llegar un ER tardío que marque el estado `INCOMPLETE`, prioricé la velocidad de enviar un evento de `FILLED` y asumí tener que enviar mas cambios de estado.
+11. En las pruebas pudimos comprobar que cuando pasa el escenario 3 que no se termina enviando al downstream, cuando consultamos la orden pudimos ver su estado `INCOMPLETE` y el campo `order_status_at_rejection` nos marcaba que estuvo en `FILLED` antes, nos dió una visibilidad inmediata de por qué no llego al downstream por mas que veamos que hay un ER en `FILLED`
+
+**Qué asumimos**
+
+1. Deduplicado por parte del downstream con `numericOrderId` + `type` como identificador.
+2. El downstream no verá status, sólo accionará ante el hecho que reciba a través del `type` en el mensaje
+
+**Hallazgos post pruebas + correcciones**
+
+1. El hilo de kafka y el hilo del barrido (independiente de kafka, un hilo generado por @Scheduler) podrían a llegar a escribir la misma fila y generar errores de concurrencia dejando campos en null:
+
+   ```
+   t=0.000  hilo del consumidor: llega el ER tardío de la orden X
+                                 lee la fila → status=FILLED, marca=null
+
+   t=0.001  hilo del barrido:    toma la orden X, publica el settlement,
+                                 escribe la marca
+   t=0.050  hilo del barrido:    COMMIT
+
+   t=0.051  hilo del consumidor: hace su UPDATE → escribe TODAS las columnas,
+                                 incluida marca=null, que es lo que leyó en t=0
+   ```
+
+   Lo corregimos sumando `@DynamicUpdate`, esto hace que cada update sólo escriba las columnas que sufren cambios y como cada hilo es dueño de cada columna ya no ocurría. El hilo del consumidor sólo escribe `status`, `applied_executions` y los tres montos, mientras que el del barrido las marcas de las publicaciones.
+
+2. El barrido tomaba de a lotes, por ende, hasta no terminar de procesar no liberaba el lote y si fallaba una volvía atrás todas y se republicaban. Se modificó para poder hacer una transacción por fila y dar el commit a la base de datos para liberar al publicar esa fila, el lock dura lo que tarda una publicación y el bloqueo por lote deja de importar. La consecuencia fue 3 idas y vueltas a la base de datos por publicación. Manteniendo el consumo en el lote de 100 de todas maneras, pero liberamos la db por cada fila.
+
+   Alternativas evaluadas y descartadas:
+   - Si bajabamos el lote a 1, era aproximadamente una fila por segundo y con 500 ordenes ibamos a tardarnos 8 minutos, lo considere no viable.
+   - Marcarla en la base de datos primero y luego publicar el settlement, pero consideré una caída entre el update en la db y la publicación, donde nos perderíamos de publicar el settlement.
+   - Publicar el settlement y luego marcar en la base de datos, nunca frenaba la ingesta pero si dos intancias barrían cada 1s el duplicado pasaba a ser algo habitual, también lo descarte, debe ser una protección no algo habitual del downstream el deduplicador.
+
+3. `publish-timeout` no es suficiente para fijar un timeout en las publicaciones porque cuando se hace un .send() lo bloquea y puede tardar mas:
+   - Medido: con `publish-timeout` en 100ms, una publicación a un topic inexistente tardó **2146ms**.
+
+   Para corregir eso sumamos `max.block.ms` que el peor escenario ahora es la suma de las dos propiedades, pero controlado.
+
+4. `FOR UPDATE SKIP LOCKED` al final no era lo que buscabamos sino lo que Hibernate 6 nos dió para esto es `FOR NO KEY UPDATE SKIP LOCKED` cuando aplicamos @Lock(PESSIMISTIC_WRITE). Este no es lock mas fuerte, sino que lo que nos ofrece es bloquear la fila hasta terminar para que esa fila no sea levantada por otro barrido y nos evita la concurrencia, y permite que el consumidor escriba el ledger cuando tomamos la FK de la orden para sumar al ledger.
+
+**Evidencia**
+
+| Qué se afirma | Cómo se probó | Resultado |
+|---|---|---|
+| Las seis filas de la tabla | `SettlementTest`, ocho casos | Verdes. Sacando el filtro por `FILLED` del barrido, **3 en rojo**: settlean la cancelada, la suprimida y la que nunca completó. Sacando la exigencia de publicación previa en el aviso, **2 en rojo** |
+| Los dos mensajes van keyeados por `numericOrderId` | Test que lee el topic y compara la key | Los dos con la key de la orden. Con una key constante, **rojo** |
+| Los barridos corren solos | Test sobre las tareas agendadas | Los dos registrados. Sacando los `@Scheduled`, **rojo** |
+| La carrera del hallazgo 1 | Test determinista de dos hilos con latches | Verde. Sin `@DynamicUpdate`, falla con *"Expecting actual not to be null"* |
+| Un settlement por orden con dos instancias | `docker compose` con app-1 y app-2 barriendo cada segundo | Un solo `ORDER_SETTLED`, publicado por **una sola** instancia, la otra en cero |
+| El orden entre settlement y aviso | Mismo escenario, con un ER tardío después | `ORDER_SETTLED` y después `ORDER_MARKED_INCOMPLETE` |
+| La compactación pisa el settlement | Topic con `cleanup.policy=compact` y segmento forzado a rotar | Sobrevive sólo el aviso. Evidencia en el punto 8 |
+| La suite completa | `./mvnw clean verify` en orden normal, inverso y aleatorio | 92 tests, sin dependencias de orden |
+
+Dos cosas que **no** están cubiertas por tests y conviene decirlo: **el barrido automático de 1s** —los
+tests lo desactivan y lo disparan a mano, así que lo que lo prueba es la corrida en docker— y **la fila 3
+de la tabla**, el settlement suprimido, que está cubierta por test pero no forzada en la demo, porque
+hacer llegar el ER tardío dentro del segundo del barrido a mano es una carrera.
+
+**Alcance:** el intervalo del barrido es la latencia del settlement y también la ventana en la que un ER
+tardío puede suprimirlo. El aviso no anula el settlement: informa que la orden cambió. No hay protocolo de
+recuperación para una orden que quedó `INCOMPLETE` después de settlear.
 
 ---
 
