@@ -38,7 +38,16 @@ public class KafkaValidationConfiguration implements KafkaListenerConfigurer {
         strict.enable(DeserializationFeature.FAIL_ON_NUMBERS_FOR_ENUMS);
         strict.coercionConfigFor(LogicalType.Integer)
                 .setCoercion(CoercionInputShape.Float, CoercionAction.Fail)
-                .setCoercion(CoercionInputShape.String, CoercionAction.Fail);
+                .setCoercion(CoercionInputShape.String, CoercionAction.Fail)
+                .setCoercion(CoercionInputShape.Boolean, CoercionAction.Fail);
+        strict.coercionConfigFor(LogicalType.Float)
+                .setCoercion(CoercionInputShape.String, CoercionAction.Fail)
+                .setCoercion(CoercionInputShape.Boolean, CoercionAction.Fail);
+        strict.coercionConfigFor(LogicalType.Enum)
+                .setCoercion(CoercionInputShape.Boolean, CoercionAction.Fail);
+        strict.coercionConfigFor(LogicalType.Textual)
+                .setCoercion(CoercionInputShape.Float, CoercionAction.Fail)
+                .setCoercion(CoercionInputShape.Boolean, CoercionAction.Fail);
         return new StringJsonMessageConverter(strict);
     }
 
@@ -46,7 +55,7 @@ public class KafkaValidationConfiguration implements KafkaListenerConfigurer {
     DeadLetterPublishingRecoverer executionReportDeadLetterRecoverer(KafkaOperations<String, String> kafkaOperations) {
         return new DeadLetterPublishingRecoverer(kafkaOperations,
                 (record, exception) -> new TopicPartition(
-                        kafkaConfigurations.getDeadLetterTopic(), record.partition()));
+                        kafkaConfigurations.getTopics().getDeadLetter(), record.partition()));
     }
 
     @Bean(destroyMethod = "destroy")
@@ -84,10 +93,10 @@ public class KafkaValidationConfiguration implements KafkaListenerConfigurer {
     @Bean
     ExponentialBackOff transientBackOff() {
         ExponentialBackOff backOff = new ExponentialBackOff();
-        backOff.setInitialInterval(kafkaConfigurations.getRetryInitialInterval().toMillis());
-        backOff.setMultiplier(kafkaConfigurations.getRetryMultiplier());
-        backOff.setMaxInterval(kafkaConfigurations.getRetryMaxInterval().toMillis());
-        backOff.setMaxAttempts(kafkaConfigurations.getRetryMaxAttempts());
+        backOff.setInitialInterval(kafkaConfigurations.getRetry().getInitialInterval().toMillis());
+        backOff.setMultiplier(kafkaConfigurations.getRetry().getMultiplier());
+        backOff.setMaxInterval(kafkaConfigurations.getRetry().getMaxInterval().toMillis());
+        backOff.setMaxAttempts(kafkaConfigurations.getRetry().getMaxAttempts());
         return backOff;
     }
 

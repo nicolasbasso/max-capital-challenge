@@ -1,5 +1,6 @@
 package com.maxcapital.orderstate.config;
 
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -17,27 +18,45 @@ import java.time.Duration;
 @ConfigurationProperties(prefix = "app.kafka")
 public class KafkaConfigurations {
 
-    @NotBlank
-    private String executionReportsTopic;
-
-    @NotBlank
-    private String deadLetterTopic;
-
+    @Valid
     @NotNull
-    private Duration retryInitialInterval;
+    private Topics topics;
 
-    @DecimalMin("1.0")
-    private double retryMultiplier;
-
+    @Valid
     @NotNull
-    private Duration retryMaxInterval;
-
-    @Positive
-    private int retryMaxAttempts;
+    private Retry retry;
 
     @Positive
     private int partitions;
 
     @Positive
     private int replicas;
+
+    @Getter
+    @Setter
+    public static class Topics {
+
+        @NotBlank
+        private String executionReports;
+
+        @NotBlank
+        private String deadLetter;
+    }
+
+    @Getter
+    @Setter
+    public static class Retry {
+
+        @NotNull
+        private Duration initialInterval;
+
+        @DecimalMin("1.0")
+        private double multiplier;
+
+        @NotNull
+        private Duration maxInterval;
+
+        @Positive
+        private int maxAttempts;
+    }
 }

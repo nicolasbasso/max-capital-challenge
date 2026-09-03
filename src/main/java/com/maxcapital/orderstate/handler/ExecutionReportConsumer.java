@@ -21,7 +21,7 @@ public class ExecutionReportConsumer {
 
     private final ExecutionReportService executionReportService;
 
-    @KafkaListener(topics = "${app.kafka.execution-reports-topic}")
+    @KafkaListener(topics = "${app.kafka.topics.execution-reports}")
     public void onExecutionReport(@Valid @Payload ExecutionReportMessage report,
                                   ConsumerRecord<String, String> record,
                                   @Header(KafkaHeaders.RECEIVED_PARTITION) int partition,

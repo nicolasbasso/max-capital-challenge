@@ -107,7 +107,7 @@ public class ExecutionReportFailureRecoverer implements ConsumerRecordRecoverer 
         switch (classify(exception)) {
             case CONTRACT -> sendToDeadLetter(record, exception);
             case TRANSIENT -> stopIngestion(record, exception,
-                    "transient failure did not clear in %d retries".formatted(kafkaConfigurations.getRetryMaxAttempts()));
+                    "transient failure did not clear in %d retries".formatted(kafkaConfigurations.getRetry().getMaxAttempts()));
             case UNKNOWN -> stopIngestion(record, exception,
                     "unexpected failure, not retryable and not a contract breach");
         }
