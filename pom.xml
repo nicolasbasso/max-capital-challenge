@@ -177,7 +177,12 @@
           <!-- La clase de arranque solo tiene main(); mutarla no dice nada del dominio. -->
           <excludedClasses>
             <param>com.maxcapital.orderstate.OrderStateServiceApplication</param>
-            <param>com.maxcapital.orderstate.config.*</param>
+            <param>com.maxcapital.orderstate.config.AppProperties</param>
+            <param>com.maxcapital.orderstate.config.KafkaConfigurations*</param>
+            <param>com.maxcapital.orderstate.config.KafkaTopicsConfiguration</param>
+            <param>com.maxcapital.orderstate.config.KafkaValidationConfiguration</param>
+            <param>com.maxcapital.orderstate.config.SettlementConfigurations*</param>
+            <param>com.maxcapital.orderstate.config.SettlementSchedulerConfiguration</param>
           </excludedClasses>
           <outputFormats>
             <param>HTML</param>
