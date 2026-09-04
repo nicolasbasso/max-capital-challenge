@@ -12,6 +12,11 @@ if [[ ! -f "scenarios/${ESC}.txt" ]]; then
 fi
 
 pg()  { docker exec maxcapital-postgres psql -U orderstate -d orderstate "$@"; }
+settlements() {
+  docker exec maxcapital-kafka /opt/kafka/bin/kafka-console-consumer.sh \
+    --bootstrap-server localhost:9092 --topic order-settlements \
+    --from-beginning --timeout-ms 4000 2>/dev/null || true
+}
 titulo() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 lag_total() {
   docker exec maxcapital-kafka /opt/kafka/bin/kafka-consumer-groups.sh \
@@ -79,6 +84,13 @@ else
 fi
 for _ in $(seq 1 60); do [[ "$(lag_total)" == "0" ]] && break; sleep 2; done
 echo "  lag pendiente: $(lag_total)"
+# El barrido publica hasta un segundo despues de que la orden queda FILLED. Se espera por la
+# base, que es barata de consultar, y recien despues se lee el topico una sola vez.
+for _ in $(seq 1 30); do
+  [[ "$(pg -tAc "select count(*) from orders where status = 'FILLED' and settlement_published_at is null;")" == "0" ]] && break
+  sleep 1
+done
+echo "  settlements pendientes de publicar: $(pg -tAc "select count(*) from orders where status = 'FILLED' and settlement_published_at is null;")"
 
 titulo "3. Estado final de las ordenes"
 pg -c "
@@ -93,7 +105,9 @@ case "$ESC" in
     echo "  Los id se intercalan entre ordenes (avanzan en paralelo) y crecen dentro de cada una"
     echo "  (mantienen su secuencia). El orden lo da id, nunca transactionTime."
     pg -c "select numeric_order_id as orden, id as ledger_id, fix_id, status
-           from execution_ledger order by numeric_order_id asc, id asc;" ;;
+           from execution_ledger order by numeric_order_id asc, id asc;"
+    echo "  Y un settlement por cada orden que llego a FILLED, keyeado por numericOrderId:"
+    settlements | sed 's/^/    /' ;;
   02-duplicates)
     echo "  Se emitieron 6 ER y solo 3 se aplicaron. Los duplicados se detectan por identidad."
     echo "  El ultimo es un NEW repetido sobre una orden ya FILLED: si la deduplicacion no"
@@ -130,9 +144,18 @@ DESALINEADAS=$(pg -tAc "
 DOBLES=$(pg -tAc "
   select count(*) from (select numeric_order_id, fix_id from execution_ledger
                         group by 1,2 having count(*) > 1) d;")
+FILLED=$(pg -tAc "select count(*) from orders where status = 'FILLED';")
+EVENTOS=$(settlements)
+SETTLED=$(echo "$EVENTOS" | grep -c ORDER_SETTLED)
+REPETIDOS=$(echo "$EVENTOS" | grep ORDER_SETTLED | grep -oE '"numericOrderId":[0-9]+' | sort | uniq -d | wc -l | tr -d ' ')
+if [[ "$SETTLED" != "$FILLED" || "$REPETIDOS" != "0" ]]; then
+  echo "  FALLA  ORDER_SETTLED=$SETTLED contra $FILLED ordenes FILLED, repetidos=$REPETIDOS"
+  exit 1
+fi
 if [[ "$DESALINEADAS" == "0" && "$DOBLES" == "0" ]]; then
   echo "  OK  el contador iguala las entradas del ledger en todas las ordenes"
   echo "  OK  ningun (numericOrderId, fixId) aparece dos veces"
+  echo "  OK  un ORDER_SETTLED por cada una de las $FILLED ordenes FILLED, ninguno repetido"
 else
   echo "  FALLA  ordenes desalineadas=$DESALINEADAS  duplicados=$DOBLES"
   exit 1
