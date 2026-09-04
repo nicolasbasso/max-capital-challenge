@@ -19,6 +19,96 @@ La traducción del enunciado a compromisos verificables está en
   contradice publica un aviso.
 - Todo se consulta por HTTP: estado, ledger, cuarentena y qué se le informó a downstream.
 
+## Cómo funciona
+
+Un ER entra por Kafka y termina en uno de tres lugares. La key del mensaje es el `numericOrderId`,
+así que todos los ER de una orden caen en la misma partición y los aplica un solo consumidor por vez.
+
+```mermaid
+flowchart TD
+    ER["ExecutionReport<br/>key = numericOrderId"] --> TOPIC[("execution-reports")]
+    TOPIC --> CONTRATO{"¿cumple el contrato?"}
+    CONTRATO -->|no| DLT[("execution-reports-dlt")]
+    CONTRATO -->|sí| DUP{"¿ya se aplicó este fixId<br/>para esta orden?"}
+    DUP -->|sí| NOOP["se ignora, nada cambia"]
+    DUP -->|no| TRANS{"¿la transición aplica sobre<br/>el estado guardado?"}
+    TRANS -->|no| CUAR[("execution_quarantine")]
+    CUAR --> INC["la orden queda INCOMPLETE"]
+    TRANS -->|sí| APLICA["se computa el estado nuevo:<br/>status, contador y montos"]
+    APLICA --> LEDGER[("execution_ledger")]
+```
+
+La publicación a downstream **no viaja en esa transacción**. Son dos barridos independientes, con su
+propio pool de hilos, que miran la base cada segundo:
+
+```mermaid
+flowchart TD
+    B1["barrido: FILLED<br/>y sin publicar"] -->|FOR NO KEY UPDATE SKIP LOCKED| P1["ORDER_SETTLED"]
+    P1 --> M1["marca settlement_published_at"]
+    B2["barrido: INCOMPLETE, publicada<br/>y sin avisar"] -->|FOR NO KEY UPDATE SKIP LOCKED| P2["ORDER_MARKED_INCOMPLETE"]
+    P2 --> M2["marca marked_incomplete_notified_at"]
+    P1 --> T[("order-settlements<br/>key = numericOrderId")]
+    P2 --> T
+```
+
+El lock es lo que hace que, con las dos instancias barriendo a la vez, cada orden la publique una
+sola. La marca se escribe **después** de que el broker confirma, así que una caída en el medio
+cuesta una republicación, nunca un settlement perdido.
+
+## El modelo de datos
+
+```mermaid
+erDiagram
+    orders ||--o{ execution_ledger : "ER aplicados"
+    orders ||--o{ execution_quarantine : "ER rechazados"
+
+    orders {
+        bigint numeric_order_id PK
+        varchar status
+        int applied_executions
+        numeric nominal_amount
+        numeric accumulative_nominal_amount
+        numeric leaves_nominal_amount
+        timestamptz settlement_published_at "null hasta publicar"
+        timestamptz marked_incomplete_notified_at "null hasta avisar"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    execution_ledger {
+        bigserial id PK "orden de inserción"
+        bigint numeric_order_id FK
+        varchar fix_id UK "único junto al id de orden"
+        varchar status
+        numeric nominal_amount
+        numeric accumulative_nominal_amount
+        numeric leaves_nominal_amount
+        jsonb raw_payload "el ER entero, como llegó"
+        timestamptz recorded_at
+    }
+
+    execution_quarantine {
+        bigserial id PK
+        bigint numeric_order_id FK
+        varchar fix_id UK "único junto al id de orden"
+        varchar incoming_status "el que traía el ER"
+        varchar order_status_at_rejection "el que tenía la orden"
+        varchar reason
+        numeric nominal_amount
+        numeric accumulative_nominal_amount
+        numeric leaves_nominal_amount
+        jsonb raw_payload
+        timestamptz recorded_at
+    }
+```
+
+El único de `execution_ledger` es la barrera de idempotencia: **una entrada por ER efectivamente
+aplicado**, y el intento repetido choca contra la restricción en vez de contra una comprobación en
+memoria. Tiene una gemela en cuarentena, para que un ER rechazado tampoco se duplique.
+
+`raw_payload` guarda el mensaje entero aunque el modelo sólo use seis campos: una tabla de auditoría
+que guarda menos de lo que llegó no sirve para reconstruir nada.
+
 ## Requisitos
 
 - **Java 21.** El enunciado admite Java 21 o 25; se eligió 21 por ser el LTS con el soporte más
@@ -58,7 +148,16 @@ docker compose down -v
 
 ## El recorrido completo
 
-Todo lo de abajo está verificado; los comandos se copian tal cual. Conviene tener abierto:
+Todo lo de abajo está verificado; los comandos se copian tal cual.
+
+**Arrancá de cero.** El recorrido usa ids fijos, así que con datos de una corrida anterior el paso 1
+devuelve otra cosa:
+
+```bash
+docker compose down -v && docker compose up -d --build
+```
+
+Y conviene tener abierto:
 
 ```bash
 docker compose logs -f app-1 app-2
@@ -215,7 +314,7 @@ El contador de la orden y la cantidad de filas del ledger tienen que coincidir s
 ./mvnw clean verify
 ```
 
-90 tests, con PostgreSQL y Kafka reales vía Testcontainers. Cubren el ciclo de vida, la
+96 tests, con PostgreSQL y Kafka reales vía Testcontainers. Cubren el ciclo de vida, la
 deduplicación, la máquina de estados, la política de errores, la coerción del contrato y el
 settlement con sus casos de falla.
 
@@ -227,6 +326,21 @@ Mutation testing. La pregunta que responde no es *cuánto código tocan los test
 tests detectan un cambio de comportamiento**: PIT altera el bytecode y verifica que algún test
 falle. Un mutante que sobrevive es una línea que se puede romper sin que ninguna prueba se entere.
 El reporte queda en `target/pit-reports/`.
+
+### Por qué el barrido devuelve cuántas publicó
+
+En producción nadie usa ese número: los barridos los llama un `@Scheduled` que descarta el
+resultado. Está porque sin él **el loop del barrido es invisible**.
+
+El barrido publica de a una y sigue mientras haya pendientes. Si esa condición se rompe —siempre
+`true`, y da cien vueltas contra una consulta vacía; siempre `false`, y publica una sola por
+pasada— **los mensajes que le llegan a downstream son exactamente los mismos**. Ningún test que
+mire el topic se entera.
+
+Lo detectó el mutation testing: la clase del publicador estaba en 57%, y los sobrevivientes eran
+todos ese booleano. Devolviendo el contador y afirmándolo en los tests —uno o más en el primer
+barrido, cero en el segundo— pasó a 91%. El número existe para que la prueba pueda ver lo que el
+topic no muestra.
 
 ## Puertos y variables
 
@@ -249,6 +363,12 @@ El reporte queda en `target/pit-reports/`.
 
 El servicio **no arranca** si el peor caso de reintentos no entra en un `max.poll.interval.ms`. Es
 deliberado: la garantía vive en el código y no en un comentario.
+
+## Escenarios preparados
+
+[`docs/DEMO.md`](./docs/DEMO.md) tiene escenarios listos para correr con `scripts/demo.sh`, entre
+ellos la caída de una instancia a mitad de procesamiento, que es más incómoda de armar a mano que
+los cinco pasos de arriba.
 
 ## Sobre el proceso
 
