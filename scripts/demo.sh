@@ -21,9 +21,28 @@ lag_total() {
 
 titulo "1. Base limpia y dos instancias"
 docker compose down -v >/dev/null 2>&1 || true
-docker compose up -d >/dev/null
-until docker logs maxcapital-app-1 2>&1 | grep -q "Started OrderState" \
-   && docker logs maxcapital-app-2 2>&1 | grep -q "Started OrderState"; do sleep 3; done
+# El "down" vuelve antes de que el daemon termine de borrar. Si el "up" arranca en el medio,
+# compose espera la salud de un contenedor que ya no existe y muere con "No such container".
+for _ in $(seq 1 30); do
+  [[ -z "$(docker ps -aq --filter label=com.docker.compose.project=max-capital-challenge)" ]] && break
+  sleep 1
+done
+if ! docker compose up -d >/dev/null 2>&1; then
+  echo "  el arranque fallo, reintentando con --force-recreate"
+  docker compose up -d --force-recreate >/dev/null 2>&1 \
+    || { echo "  FALLA  no se pudo levantar el stack"; exit 1; }
+fi
+ARRANCARON=0
+for _ in $(seq 1 60); do
+  if docker logs maxcapital-app-1 2>&1 | grep -q "Started OrderState" \
+  && docker logs maxcapital-app-2 2>&1 | grep -q "Started OrderState"; then ARRANCARON=1; break; fi
+  sleep 3
+done
+if [[ "$ARRANCARON" != "1" ]]; then
+  echo "  FALLA  las instancias no arrancaron en 180s"
+  for i in 1 2; do docker logs --tail 20 "maxcapital-app-$i" 2>&1 | sed "s/^/    app-$i: /"; done
+  exit 1
+fi
 docker compose ps --format '  {{.Name}}  {{.Status}}'
 # Cual de las dos gana la carrera de Flyway es no deterministico: la que llega primero migra
 # y la otra encuentra el esquema al dia. El lock de Flyway las coordina sin que hagamos nada.
@@ -97,6 +116,13 @@ case "$ESC" in
 esac
 
 titulo "5. Verificacion"
+# Las dos verificaciones de abajo son vacuamente ciertas con la tabla vacia: un escenario que no
+# proceso nada terminaria en OK. Es el peor final posible, asi que se corta antes.
+ORDENES=$(pg -tAc "select count(*) from orders;")
+if [[ "$ORDENES" == "0" ]]; then
+  echo "  FALLA  no se procesó ninguna orden, no hay nada que verificar"
+  exit 1
+fi
 DESALINEADAS=$(pg -tAc "
   select count(*) from orders o
   where o.applied_executions <> (select count(*) from execution_ledger l
