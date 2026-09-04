@@ -35,14 +35,16 @@ for i in 1 2; do
 done
 
 titulo "2. Emision del escenario $ESC"
+# Si la emision falla, las verificaciones del paso 5 son vacuamente ciertas con cero ordenes
+# y el script terminaria en OK sin haber procesado nada.
 if [[ "$ESC" == "04-rebalance" ]]; then
   ./scripts/emit.sh "$ESC" 0.4 & EMIT=$!
   sleep 5
   echo "  >>> matando app-1 a mitad del stream"
   docker kill maxcapital-app-1 >/dev/null
-  wait $EMIT
+  wait $EMIT || { echo "  FALLA  la emision termino mal"; exit 1; }
 else
-  ./scripts/emit.sh "$ESC"
+  ./scripts/emit.sh "$ESC" || { echo "  FALLA  la emision termino mal"; exit 1; }
 fi
 for _ in $(seq 1 60); do [[ "$(lag_total)" == "0" ]] && break; sleep 2; done
 echo "  lag pendiente: $(lag_total)"
@@ -100,5 +102,8 @@ fi
 
 titulo "6. Consultar cualquier orden por HTTP"
 PRIMERA=$(pg -tAc "select min(numeric_order_id) from orders;")
-echo "  curl -s localhost:8081/orders/$PRIMERA"
-echo "  (app-2 responde lo mismo en 8082: leen la misma base)"
+# En 04-rebalance app-1 quedo muerta a proposito, asi que su puerto no responde.
+PUERTO=8081
+docker ps --filter name=maxcapital-app-1 --filter status=running -q | grep -q . || PUERTO=8082
+echo "  curl -s localhost:$PUERTO/orders/$PRIMERA"
+echo "  (la otra instancia responde lo mismo: leen la misma base)"
