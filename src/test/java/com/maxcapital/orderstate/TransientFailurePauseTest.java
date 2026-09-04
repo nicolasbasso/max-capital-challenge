@@ -32,10 +32,10 @@ class TransientFailurePauseTest extends IntegrationTestBase {
 
     @Test
     void mientrasReintentaUnFalloTransitorioElConsumidorQuedaPausadoYNoBloqueadoEnElPoll() {
-        long numericOrderId = 70101L;
-        TransientFailureInjection.fallarLasProximas(2);
+        long numericOrderId = Ordenes.nueva();
+        TransientFailureInjection.fallarLasProximas(numericOrderId, 2);
 
-        ExecutionReportMessage er = ExecutionReports.er("FIX-70101", numericOrderId, OrderStatus.NEW);
+        ExecutionReportMessage er = ExecutionReports.er("FIX-%d".formatted(numericOrderId), numericOrderId, OrderStatus.NEW);
         kafka.send(topic, String.valueOf(numericOrderId), ExecutionReports.raw(er));
 
         assertThat(huboPausa())
@@ -46,7 +46,9 @@ class TransientFailurePauseTest extends IntegrationTestBase {
         assertThat(esperarQueSeAplique(numericOrderId))
                 .as("pasado el fallo transitorio el ER se aplica igual, sin perderse")
                 .isTrue();
-        assertThat(TransientFailureInjection.fallosPendientes()).isZero();
+        assertThat(TransientFailureInjection.invocaciones())
+                .as("dos intentos que fallaron y el tercero que salió bien")
+                .isEqualTo(3);
     }
 
     private boolean huboPausa() {
