@@ -3,9 +3,8 @@
 Servicio que consume `ExecutionReport` de forma asíncrona y mantiene el estado de cada orden
 correcto bajo carga, reentregas y fallas, corriendo en dos instancias en paralelo.
 
-El razonamiento detrás del diseño está en [`DECISIONS.md`](./DECISIONS.md).
-La traducción del enunciado a compromisos verificables está en
-[`docs/acceptance-matrix.md`](./docs/acceptance-matrix.md).
+El razonamiento detrás del diseño está en [`DECISIONS.md`](./DECISIONS.md): qué garantiza cada
+componente, qué no garantiza, y qué se resignó a conciencia.
 
 ## Qué hace
 
