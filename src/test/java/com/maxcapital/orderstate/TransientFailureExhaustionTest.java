@@ -27,15 +27,15 @@ class TransientFailureExhaustionTest extends IntegrationTestBase {
     void devolverLaIngestaAsuEstadoNormal() {
         TransientFailureInjection.reset();
         registry.start();
-        esperarHasta(this::todosCorriendo);
+        esperarHasta(this::todosCorriendoConParticiones);
     }
 
     @Test
     void unFalloTransitorioSeReintentaLasVecesConfiguradasYReciénDespuesFrena() {
-        long numericOrderId = 994001L;
-        TransientFailureInjection.fallarLasProximas(Integer.MAX_VALUE);
+        long numericOrderId = Ordenes.nueva();
+        TransientFailureInjection.fallarLasProximas(numericOrderId, Integer.MAX_VALUE);
 
-        publicar(numericOrderId, "FIX-994001");
+        publicar(numericOrderId, "FIX-%d".formatted(numericOrderId));
 
         assertThat(esperarHasta(() -> !todosCorriendo()))
                 .as("agotados los reintentos la instancia frena en vez de reintentar para siempre")
@@ -61,11 +61,11 @@ class TransientFailureExhaustionTest extends IntegrationTestBase {
 
     @Test
     void unFalloDesconocidoNoSeReintentaNiUnaVez() {
-        long numericOrderId = 994002L;
+        long numericOrderId = Ordenes.nueva();
         TransientFailureInjection.fallarCon(() -> new NullPointerException("bug propio"));
-        TransientFailureInjection.fallarLasProximas(Integer.MAX_VALUE);
+        TransientFailureInjection.fallarLasProximas(numericOrderId, Integer.MAX_VALUE);
 
-        publicar(numericOrderId, "FIX-994002");
+        publicar(numericOrderId, "FIX-%d".formatted(numericOrderId));
 
         assertThat(esperarHasta(() -> !todosCorriendo()))
                 .as("un bug propio frena la ingesta")
@@ -79,6 +79,13 @@ class TransientFailureExhaustionTest extends IntegrationTestBase {
     private void publicar(long numericOrderId, String fixId) {
         kafka.send(topic, String.valueOf(numericOrderId), ExecutionReports.raw(
                 ExecutionReports.er(fixId, numericOrderId, OrderStatus.NEW)));
+    }
+
+    private boolean todosCorriendoConParticiones() {
+        return registry.getListenerContainers().stream().allMatch(container ->
+                container.isRunning()
+                        && container.getAssignedPartitions() != null
+                        && !container.getAssignedPartitions().isEmpty());
     }
 
     private boolean todosCorriendo() {

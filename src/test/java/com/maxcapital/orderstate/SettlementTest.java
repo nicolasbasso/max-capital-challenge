@@ -25,6 +25,7 @@ import java.time.Duration;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class SettlementTest extends IntegrationTestBase {
 
@@ -39,10 +40,13 @@ class SettlementTest extends IntegrationTestBase {
 
     @Test
     void unaOrdenQueCompletaProduceUnSettlementYSoloUno() {
-        long numericOrderId = 970001L;
+        long numericOrderId = Ordenes.nueva();
         completar(numericOrderId);
 
-        settlementPublisher.publishPendingSettlements();
+        assertThat(settlementPublisher.publishPendingSettlements())
+                .as("el barrido publica lo que encuentra pendiente y devuelve cuántas: "
+                        + "si el loop no cortara, o cortara de más, el número lo delata")
+                .isGreaterThanOrEqualTo(1);
 
         assertThat(eventosDe(numericOrderId))
                 .as("la orden completó: se le avisa a downstream una sola vez")
@@ -52,7 +56,9 @@ class SettlementTest extends IntegrationTestBase {
                 .as("la conversación con downstream se consulta por el GET, no se busca en logs")
                 .isNotNull();
 
-        settlementPublisher.publishPendingSettlements();
+        assertThat(settlementPublisher.publishPendingSettlements())
+                .as("ya no queda nada pendiente, así que el barrido no publica nada")
+                .isZero();
 
         assertThat(eventosDe(numericOrderId))
                 .as("el segundo barrido ya no la encuentra pendiente")
@@ -61,7 +67,7 @@ class SettlementTest extends IntegrationTestBase {
 
     @Test
     void unaOrdenCanceladaNoProduceSettlement() {
-        long numericOrderId = 970002L;
+        long numericOrderId = Ordenes.nueva();
         enviar(numericOrderId, "FIX-%d-1".formatted(numericOrderId), OrderStatus.NEW, 0, 4956);
         enviar(numericOrderId, "FIX-%d-2".formatted(numericOrderId), OrderStatus.CANCELLED, 0, 4956);
         esperarElFixId(numericOrderId, "FIX-%d-2".formatted(numericOrderId));
@@ -76,14 +82,17 @@ class SettlementTest extends IntegrationTestBase {
 
     @Test
     void unErTardioDespuesDePublicarProduceElAvisoYEnEseOrden() {
-        long numericOrderId = 970003L;
+        long numericOrderId = Ordenes.nueva();
         completar(numericOrderId);
         settlementPublisher.publishPendingSettlements();
 
         enviar(numericOrderId, "FIX-%d-TARDIO".formatted(numericOrderId), OrderStatus.PARTIALLY_FILLED, 1234, 3722);
         esperarQueQuede(numericOrderId, OrderStatus.INCOMPLETE);
 
-        settlementPublisher.publishPendingIncompleteNotices();
+        assertThat(settlementPublisher.publishPendingIncompleteNotices()).isGreaterThanOrEqualTo(1);
+        assertThat(settlementPublisher.publishPendingIncompleteNotices())
+                .as("el aviso ya salió: el barrido siguiente no encuentra nada")
+                .isZero();
 
         assertThat(eventosDe(numericOrderId))
                 .as("misma clave, mismo topic: el aviso llega después del settlement sin "
@@ -94,7 +103,7 @@ class SettlementTest extends IntegrationTestBase {
 
     @Test
     void unErTardioAntesDePublicarSuprimeElSettlement() {
-        long numericOrderId = 970004L;
+        long numericOrderId = Ordenes.nueva();
         completar(numericOrderId);
 
         enviar(numericOrderId, "FIX-%d-TARDIO".formatted(numericOrderId), OrderStatus.PARTIALLY_FILLED, 1234, 3722);
@@ -111,7 +120,7 @@ class SettlementTest extends IntegrationTestBase {
 
     @Test
     void unaOrdenIncompletaQueNuncaCompletoNoProduceNada() {
-        long numericOrderId = 970005L;
+        long numericOrderId = Ordenes.nueva();
         enviar(numericOrderId, "FIX-%d-1".formatted(numericOrderId), OrderStatus.NEW, 0, 4956);
         enviar(numericOrderId, "FIX-%d-2".formatted(numericOrderId), OrderStatus.NEW, 0, 4956);
         esperarQueQuede(numericOrderId, OrderStatus.INCOMPLETE);
@@ -126,7 +135,7 @@ class SettlementTest extends IntegrationTestBase {
 
     @Test
     void laReentregaDelErQueCompletoNoProduceUnSegundoSettlement() {
-        long numericOrderId = 970006L;
+        long numericOrderId = Ordenes.nueva();
         completar(numericOrderId);
         settlementPublisher.publishPendingSettlements();
 
@@ -145,7 +154,7 @@ class SettlementTest extends IntegrationTestBase {
 
     @Test
     void losDosMensajesVanKeyeadosPorNumericOrderId() {
-        long numericOrderId = 970007L;
+        long numericOrderId = Ordenes.nueva();
         completar(numericOrderId);
         settlementPublisher.publishPendingSettlements();
 
@@ -187,6 +196,34 @@ class SettlementTest extends IntegrationTestBase {
                     .isEqualTo(SettlementSchedulerConfiguration.SETTLEMENT_SCHEDULER);
         }
         assertThat(scheduledPostProcessor.getScheduledTasks()).isNotEmpty();
+    }
+
+    @Test
+    void siFallaLaPublicacionLaOrdenQuedaSinMarcarYElBarridoSiguienteReintenta() {
+        long numericOrderId = Ordenes.nueva();
+        completar(numericOrderId);
+
+        Duration original = settlementConfigurations.getPublishTimeout();
+        settlementConfigurations.setPublishTimeout(Duration.ZERO);
+        try {
+            assertThatThrownBy(settlementPublisher::publishPendingSettlements)
+                    .as("no se marca como publicado algo que el broker no confirmó")
+                    .isInstanceOf(IllegalStateException.class);
+        } finally {
+            settlementConfigurations.setPublishTimeout(original);
+        }
+
+        assertThat(orders.findById(numericOrderId).orElseThrow().getSettlementPublishedAt())
+                .as("la transacción se revierte entera: la marca no se escribe")
+                .isNull();
+
+        assertThat(settlementPublisher.publishPendingSettlements()).isGreaterThanOrEqualTo(1);
+        assertThat(eventosDe(numericOrderId))
+                .as("acá se ve la ventana de la entrega al menos una vez: el primer envío llegó al "
+                        + "broker y lo que falló fue esperar la confirmación, así que la orden quedó "
+                        + "sin marcar y el barrido siguiente la publicó de nuevo. Downstream recibe "
+                        + "el mismo hecho dos veces y por eso deduplica por clave y tipo")
+                .containsExactly("ORDER_SETTLED", "ORDER_SETTLED");
     }
 
     private void completar(long numericOrderId) {

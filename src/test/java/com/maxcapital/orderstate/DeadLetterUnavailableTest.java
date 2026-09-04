@@ -27,7 +27,7 @@ class DeadLetterUnavailableTest extends IntegrationTestBase {
     void devolverLaIngestaAsuEstadoNormal() {
         DeadLetterFailureInjection.reset();
         registry.start();
-        esperarHasta(this::todosCorriendo);
+        esperarHasta(this::todosCorriendoConParticiones);
     }
 
     @Test
@@ -56,6 +56,13 @@ class DeadLetterUnavailableTest extends IntegrationTestBase {
                 String.valueOf(numericOrderId), Duration.ofSeconds(45)))
                 .as("el offset nunca se commiteó, así que al volver la dead letter el ER se preserva igual")
                 .isNotNull();
+    }
+
+    private boolean todosCorriendoConParticiones() {
+        return registry.getListenerContainers().stream().allMatch(container ->
+                container.isRunning()
+                        && container.getAssignedPartitions() != null
+                        && !container.getAssignedPartitions().isEmpty());
     }
 
     private boolean todosCorriendo() {

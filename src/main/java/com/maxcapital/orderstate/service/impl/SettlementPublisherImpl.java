@@ -40,22 +40,23 @@ public class SettlementPublisherImpl implements SettlementPublisher {
     @Override
     @Scheduled(fixedDelayString = "${app.settlement.sweep.interval}",
             scheduler = SettlementSchedulerConfiguration.SETTLEMENT_SCHEDULER)
-    public void publishPendingSettlements() {
-        sweep(this::publishNextSettlement);
+    public int publishPendingSettlements() {
+        return sweep(this::publishNextSettlement);
     }
 
     @Override
     @Scheduled(fixedDelayString = "${app.settlement.sweep.interval}",
             scheduler = SettlementSchedulerConfiguration.SETTLEMENT_SCHEDULER)
-    public void publishPendingIncompleteNotices() {
-        sweep(this::publishNextIncompleteNotice);
+    public int publishPendingIncompleteNotices() {
+        return sweep(this::publishNextIncompleteNotice);
     }
 
-    private void sweep(BooleanSupplier publishNext) {
+    private int sweep(BooleanSupplier publishNext) {
         int published = 0;
         while (published < settlementConfigurations.getSweep().getBatchSize() && publishNext.getAsBoolean()) {
             published++;
         }
+        return published;
     }
 
     private boolean publishNextSettlement() {

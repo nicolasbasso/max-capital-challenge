@@ -2,7 +2,7 @@ package com.maxcapital.orderstate.service;
 
 public interface SettlementPublisher {
 
-    void publishPendingSettlements();
+    int publishPendingSettlements();
 
-    void publishPendingIncompleteNotices();
+    int publishPendingIncompleteNotices();
 }

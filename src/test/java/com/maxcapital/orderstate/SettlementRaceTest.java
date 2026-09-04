@@ -30,7 +30,7 @@ class SettlementRaceTest extends IntegrationTestBase {
 
     @Test
     void unErQueEsperaAlBarridoNoPuedeBorrarLaMarcaQueElBarridoYaConfirmo() throws Exception {
-        long numericOrderId = 978001L;
+        long numericOrderId = Ordenes.nueva();
         completar(numericOrderId);
 
         CountDownLatch marcada = new CountDownLatch(1);
@@ -47,7 +47,7 @@ class SettlementRaceTest extends IntegrationTestBase {
         assertThat(marcada.await(20, TimeUnit.SECONDS)).isTrue();
 
         Thread erTardio = new Thread(() -> executionReportService.apply(
-                ExecutionReports.er("FIX-978001-TARDIO", numericOrderId, OrderStatus.PARTIALLY_FILLED, 3000, 1956),
+                ExecutionReports.er("FIX-%d-TARDIO".formatted(numericOrderId), numericOrderId, OrderStatus.PARTIALLY_FILLED, 3000, 1956),
                 "{}"));
         erTardio.start();
         Thread.sleep(2000);
@@ -68,9 +68,9 @@ class SettlementRaceTest extends IntegrationTestBase {
 
     private void completar(long numericOrderId) {
         kafka.send(topic, String.valueOf(numericOrderId), ExecutionReports.raw(
-                ExecutionReports.er("FIX-978001-1", numericOrderId, OrderStatus.NEW)));
+                ExecutionReports.er("FIX-%d-1".formatted(numericOrderId), numericOrderId, OrderStatus.NEW)));
         kafka.send(topic, String.valueOf(numericOrderId), ExecutionReports.raw(
-                ExecutionReports.er("FIX-978001-2", numericOrderId, OrderStatus.FILLED, 4956, 0)));
+                ExecutionReports.er("FIX-%d-2".formatted(numericOrderId), numericOrderId, OrderStatus.FILLED, 4956, 0)));
         long limite = System.currentTimeMillis() + 30_000;
         while (System.currentTimeMillis() < limite) {
             if (orders.findById(numericOrderId).map(Order::getStatus).orElse(null) == OrderStatus.FILLED) {
