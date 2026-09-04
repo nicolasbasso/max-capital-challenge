@@ -139,6 +139,14 @@ imágenes ya construidas, unos quince segundos. Esperá a ver:
 docker compose logs -f app-1 | grep "Started OrderStateServiceApplication"
 ```
 
+**Si algún puerto estaba ocupado.** Docker levanta el resto de la stack igual y deja el contenedor
+que no pudo bindear **sin red**. Al reintentar, ese contenedor falla diciendo que no puede conectarse
+a la base, que no tiene nada que ver con la causa. Liberá el puerto y recreá:
+
+```bash
+docker compose up -d --force-recreate
+```
+
 Para bajar todo y borrar los datos:
 
 ```bash
