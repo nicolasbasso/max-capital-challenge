@@ -73,6 +73,14 @@ class RetryBudgetValidationTest {
                 .doesNotThrowAnyException();
     }
 
+    @Test
+    void quedarJustoEnElLimiteTampocoAlcanza() {
+        assertThatThrownBy(() -> validar(pool(30_000), backOff(3), 123_500))
+                .as("4 intentos de 30s más 3,5s de backoff dan exactamente 123.500ms: "
+                        + "consumir el intervalo entero no deja margen para nada")
+                .isInstanceOf(IllegalStateException.class);
+    }
+
     private static HikariDataSource pool(long connectionTimeout) {
         HikariDataSource hikari = new HikariDataSource();
         hikari.setConnectionTimeout(connectionTimeout);

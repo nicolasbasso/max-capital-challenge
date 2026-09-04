@@ -27,7 +27,7 @@ class TransientFailureExhaustionTest extends IntegrationTestBase {
     void devolverLaIngestaAsuEstadoNormal() {
         TransientFailureInjection.reset();
         registry.start();
-        esperarHasta(this::todosCorriendo);
+        esperarHasta(this::todosCorriendoConParticiones);
     }
 
     @Test
@@ -79,6 +79,13 @@ class TransientFailureExhaustionTest extends IntegrationTestBase {
     private void publicar(long numericOrderId, String fixId) {
         kafka.send(topic, String.valueOf(numericOrderId), ExecutionReports.raw(
                 ExecutionReports.er(fixId, numericOrderId, OrderStatus.NEW)));
+    }
+
+    private boolean todosCorriendoConParticiones() {
+        return registry.getListenerContainers().stream().allMatch(container ->
+                container.isRunning()
+                        && container.getAssignedPartitions() != null
+                        && !container.getAssignedPartitions().isEmpty());
     }
 
     private boolean todosCorriendo() {
