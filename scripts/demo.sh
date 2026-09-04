@@ -12,6 +12,11 @@ if [[ ! -f "scenarios/${ESC}.txt" ]]; then
 fi
 
 pg()  { docker exec maxcapital-postgres psql -U orderstate -d orderstate "$@"; }
+settlements() {
+  docker exec maxcapital-kafka /opt/kafka/bin/kafka-console-consumer.sh \
+    --bootstrap-server localhost:9092 --topic order-settlements \
+    --from-beginning --timeout-ms 4000 2>/dev/null || true
+}
 titulo() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 lag_total() {
   docker exec maxcapital-kafka /opt/kafka/bin/kafka-consumer-groups.sh \
@@ -21,9 +26,28 @@ lag_total() {
 
 titulo "1. Base limpia y dos instancias"
 docker compose down -v >/dev/null 2>&1 || true
-docker compose up -d >/dev/null
-until docker logs maxcapital-app-1 2>&1 | grep -q "Started OrderState" \
-   && docker logs maxcapital-app-2 2>&1 | grep -q "Started OrderState"; do sleep 3; done
+# El "down" vuelve antes de que el daemon termine de borrar. Si el "up" arranca en el medio,
+# compose espera la salud de un contenedor que ya no existe y muere con "No such container".
+for _ in $(seq 1 30); do
+  [[ -z "$(docker ps -aq --filter label=com.docker.compose.project=max-capital-challenge)" ]] && break
+  sleep 1
+done
+if ! docker compose up -d >/dev/null 2>&1; then
+  echo "  el arranque fallo, reintentando con --force-recreate"
+  docker compose up -d --force-recreate >/dev/null 2>&1 \
+    || { echo "  FALLA  no se pudo levantar el stack"; exit 1; }
+fi
+ARRANCARON=0
+for _ in $(seq 1 60); do
+  if docker logs maxcapital-app-1 2>&1 | grep -q "Started OrderState" \
+  && docker logs maxcapital-app-2 2>&1 | grep -q "Started OrderState"; then ARRANCARON=1; break; fi
+  sleep 3
+done
+if [[ "$ARRANCARON" != "1" ]]; then
+  echo "  FALLA  las instancias no arrancaron en 180s"
+  for i in 1 2; do docker logs --tail 20 "maxcapital-app-$i" 2>&1 | sed "s/^/    app-$i: /"; done
+  exit 1
+fi
 docker compose ps --format '  {{.Name}}  {{.Status}}'
 # Cual de las dos gana la carrera de Flyway es no deterministico: la que llega primero migra
 # y la otra encuentra el esquema al dia. El lock de Flyway las coordina sin que hagamos nada.
@@ -33,6 +57,18 @@ for i in 1 2; do
     | grep -oE "Successfully applied [0-9]+ migrations|is up to date" \
     | head -1 | sed "s/^/    app-$i: /" || true
 done
+
+# Los logs se guardan pase lo que pase: el escenario siguiente arranca con "down -v" y se los
+# lleva puestos, y si la verificacion falla es justo cuando mas se los quiere.
+guardar_logs() {
+  mkdir -p logs
+  local destino="logs/${ESC}-$(date +%Y%m%d-%H%M%S).log"
+  docker compose logs --no-color > "$destino" 2>&1 || true
+  printf '\n\033[1m7. Logs\033[0m\n'
+  echo "  guardados en $destino"
+  echo "  en vivo, desde otra terminal:  docker compose -p max-capital-challenge logs -f app-1 app-2"
+}
+trap guardar_logs EXIT
 
 titulo "2. Emision del escenario $ESC"
 # Si la emision falla, las verificaciones del paso 5 son vacuamente ciertas con cero ordenes
@@ -48,6 +84,13 @@ else
 fi
 for _ in $(seq 1 60); do [[ "$(lag_total)" == "0" ]] && break; sleep 2; done
 echo "  lag pendiente: $(lag_total)"
+# El barrido publica hasta un segundo despues de que la orden queda FILLED. Se espera por la
+# base, que es barata de consultar, y recien despues se lee el topico una sola vez.
+for _ in $(seq 1 30); do
+  [[ "$(pg -tAc "select count(*) from orders where status = 'FILLED' and settlement_published_at is null;")" == "0" ]] && break
+  sleep 1
+done
+echo "  settlements pendientes de publicar: $(pg -tAc "select count(*) from orders where status = 'FILLED' and settlement_published_at is null;")"
 
 titulo "3. Estado final de las ordenes"
 pg -c "
@@ -62,7 +105,9 @@ case "$ESC" in
     echo "  Los id se intercalan entre ordenes (avanzan en paralelo) y crecen dentro de cada una"
     echo "  (mantienen su secuencia). El orden lo da id, nunca transactionTime."
     pg -c "select numeric_order_id as orden, id as ledger_id, fix_id, status
-           from execution_ledger order by numeric_order_id asc, id asc;" ;;
+           from execution_ledger order by numeric_order_id asc, id asc;"
+    echo "  Y un settlement por cada orden que llego a FILLED, keyeado por numericOrderId:"
+    settlements | sed 's/^/    /' ;;
   02-duplicates)
     echo "  Se emitieron 6 ER y solo 3 se aplicaron. Los duplicados se detectan por identidad."
     echo "  El ultimo es un NEW repetido sobre una orden ya FILLED: si la deduplicacion no"
@@ -85,6 +130,13 @@ case "$ESC" in
 esac
 
 titulo "5. Verificacion"
+# Las dos verificaciones de abajo son vacuamente ciertas con la tabla vacia: un escenario que no
+# proceso nada terminaria en OK. Es el peor final posible, asi que se corta antes.
+ORDENES=$(pg -tAc "select count(*) from orders;")
+if [[ "$ORDENES" == "0" ]]; then
+  echo "  FALLA  no se procesó ninguna orden, no hay nada que verificar"
+  exit 1
+fi
 DESALINEADAS=$(pg -tAc "
   select count(*) from orders o
   where o.applied_executions <> (select count(*) from execution_ledger l
@@ -92,9 +144,18 @@ DESALINEADAS=$(pg -tAc "
 DOBLES=$(pg -tAc "
   select count(*) from (select numeric_order_id, fix_id from execution_ledger
                         group by 1,2 having count(*) > 1) d;")
+FILLED=$(pg -tAc "select count(*) from orders where status = 'FILLED';")
+EVENTOS=$(settlements)
+SETTLED=$(echo "$EVENTOS" | grep -c ORDER_SETTLED)
+REPETIDOS=$(echo "$EVENTOS" | grep ORDER_SETTLED | grep -oE '"numericOrderId":[0-9]+' | sort | uniq -d | wc -l | tr -d ' ')
+if [[ "$SETTLED" != "$FILLED" || "$REPETIDOS" != "0" ]]; then
+  echo "  FALLA  ORDER_SETTLED=$SETTLED contra $FILLED ordenes FILLED, repetidos=$REPETIDOS"
+  exit 1
+fi
 if [[ "$DESALINEADAS" == "0" && "$DOBLES" == "0" ]]; then
   echo "  OK  el contador iguala las entradas del ledger en todas las ordenes"
   echo "  OK  ningun (numericOrderId, fixId) aparece dos veces"
+  echo "  OK  un ORDER_SETTLED por cada una de las $FILLED ordenes FILLED, ninguno repetido"
 else
   echo "  FALLA  ordenes desalineadas=$DESALINEADAS  duplicados=$DOBLES"
   exit 1

@@ -170,6 +170,13 @@ Y conviene tener abierto:
 docker compose logs -f app-1 app-2
 ```
 
+Ese comando busca el `docker-compose.yml` en el directorio actual. Si lo corrés desde una segunda
+terminal, que abre en `~`, usá la forma que no depende de dónde estés parado:
+
+```bash
+docker compose -p max-capital-challenge logs -f app-1 app-2
+```
+
 Un ER necesita seis campos: `fixId`, `numericOrderId`, `status` y los tres montos. El resto del
 mensaje real se conserva entero en `rawPayload` aunque no esté modelado.
 

@@ -1,5 +1,9 @@
 # Puertos elegidos para no colisionar con otros stacks de la maquina.
 # Nombres de contenedor y volumen propios del proyecto por la misma razon.
+# Fijamos el nombre del proyecto para que no dependa de como se llame la carpeta del clon:
+# de eso depende que 'docker compose -p max-capital-challenge' funcione desde cualquier directorio.
+name: max-capital-challenge
+
 services:
 
   postgres:
