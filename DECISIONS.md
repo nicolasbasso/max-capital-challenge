@@ -89,8 +89,9 @@ sistema de resiliencia ante caída del broker.
 **Requisito.** Un ER duplicado o reentregado no debe corromper el estado. `numericOrderId` identifica la
 **orden** y se repite en todos sus ER: muchos ER por orden es lo normal, no un duplicado.
 
-**Qué protege.** La condición de *"exactamente una vez"* de la invariante de secuencia, en
-[`docs/acceptance-matrix.md`](./docs/acceptance-matrix.md).
+**Qué protege.** La condición de *"exactamente una vez"* de la invariante de secuencia: el estado
+persistido de una orden corresponde a la aplicación, exactamente una vez y en orden, de un prefijo
+de la secuencia de ER que el mercado emitió para ella.
 
 **Decisión.** Clave compuesta `(numericOrderId, fixId)`, con restricción de unicidad durable en PostgreSQL.
 
