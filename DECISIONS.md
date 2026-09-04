@@ -460,7 +460,7 @@ publicación física al broker no es exactly-once por sí sola, y dónde vive re
 | Un settlement por orden con dos instancias | `docker compose` con app-1 y app-2 barriendo cada segundo | Un solo `ORDER_SETTLED`, publicado por **una sola** instancia, la otra en cero |
 | El orden entre settlement y aviso | Mismo escenario, con un ER tardío después | `ORDER_SETTLED` y después `ORDER_MARKED_INCOMPLETE` |
 | La compactación pisa el settlement | Topic con `cleanup.policy=compact` y segmento forzado a rotar | Sobrevive sólo el aviso. Evidencia en el punto 8 |
-| La suite completa | `./mvnw clean verify` en orden normal, inverso y aleatorio | 92 tests, sin dependencias de orden |
+| La suite completa | `./mvnw clean verify` en orden normal, inverso y aleatorio | 96 tests, sin dependencias de orden |
 
 Dos cosas que **no** están cubiertas por tests y conviene decirlo: **el barrido automático de 1s** —los
 tests lo desactivan y lo disparan a mano, así que lo que lo prueba es la corrida en docker— y **la fila 3

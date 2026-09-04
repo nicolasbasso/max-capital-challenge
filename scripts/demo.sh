@@ -34,6 +34,18 @@ for i in 1 2; do
     | head -1 | sed "s/^/    app-$i: /" || true
 done
 
+# Los logs se guardan pase lo que pase: el escenario siguiente arranca con "down -v" y se los
+# lleva puestos, y si la verificacion falla es justo cuando mas se los quiere.
+guardar_logs() {
+  mkdir -p logs
+  local destino="logs/${ESC}-$(date +%Y%m%d-%H%M%S).log"
+  docker compose logs --no-color > "$destino" 2>&1 || true
+  printf '\n\033[1m7. Logs\033[0m\n'
+  echo "  guardados en $destino"
+  echo "  en vivo, desde otra terminal:  docker compose -p max-capital-challenge logs -f app-1 app-2"
+}
+trap guardar_logs EXIT
+
 titulo "2. Emision del escenario $ESC"
 # Si la emision falla, las verificaciones del paso 5 son vacuamente ciertas con cero ordenes
 # y el script terminaria en OK sin haber procesado nada.
