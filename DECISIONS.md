@@ -30,7 +30,7 @@ Una decisión atraviesa cuatro estados. La distinción importa: elegir no es lo 
 | D-005 | Máquina de estados y terminalidad | **Elegida** | Construida: 30 casos de transición, más el ciclo de vida en docker |
 | D-006 | Errores transitorios, permanentes y orden incompleta | **Elegida** | Cuarentena, dead-letter y backoff, con pruebas en docker |
 | D-007 | Settlement, outbox y deduplicación downstream | **Elegida** | Barrido, aviso de cambio y contrato del mensaje, con pruebas en docker |
-| D-008 | Alcance declarado y trabajo fuera de alcance | Abierta | — |
+| D-008 | Alcance declarado y trabajo fuera de alcance | **Elegida** | Cinco límites declarados, cuatro ya mencionados en decisiones anteriores |
 
 ---
 
@@ -478,4 +478,14 @@ recuperación para una orden que quedó `INCOMPLETE` después de settlear.
 **Pregunta que debe responder:** ¿qué se dejó deliberadamente afuera, por qué, y cómo se resolvería en una
 versión completa?
 
-**Estado:** abierta. Se completa al final, desde lo efectivamente construido.
+**Estado:** cerrada.
+
+Junto acá lo que decidí dejar afuera, con el motivo y con lo que haría una versión completa. Hay cosas mencionadas en los anteriores pero traté de juntarlas en una tabla
+
+| Qué quedó afuera                                                                               | Por qué                                                                                                                                    | En una versión completa |
+|------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------|---|
+| Health indicator de la instancia frenada                                                       | Se priorizó no perder nada, al resolver la incidencia hay que reiniciar                                                                    | Un indicador que exponga la ingesta frenada |
+| Protocolo de recuperación de las órdenes `INCOMPLETE` y de los ER que quedan en la dead-letter | Para esto necesitamos conocer del negocio, establecer reglas y planes de recuperación para cada casuística, no es una decisión técnica 100% | Un endpoint de reproceso, y quién lo autoriza |
+| La deduplicación del `settlement` en el consumidor                                             | El enunciado pide publicarlo, no consumirlo. La identidad es `numericOrderId` + tipo y la resuelve el consumidor                           | El consumidor deduplica por esa identidad |
+| Test del barrido automático, los tests desactivan el @Scheduled y lo disparan a mano            | Lo inicializa y ejecuta docker                                                                                                             | Un test con el `@Scheduled` corriendo |
+| Cobertura del nombre del consumer group                                                        | Los 96 tests pasaron en verde con el grupo renombrado; el defecto lo agarró la demo                                                        | Un test que afirme el `group.id` efectivo |
